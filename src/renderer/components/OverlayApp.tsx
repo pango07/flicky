@@ -116,6 +116,12 @@ export function OverlayApp() {
     };
 
     const startMic = async () => {
+      // Reset the stop flag at the top so subsequent presses always
+      // get a fresh start signal. On the very first press, ensureGraph
+      // also resets this; on press 2+, ensureGraph short-circuits with
+      // the existing node and would never clear the flag — leaving it
+      // stuck `true` and silently bailing every subsequent call.
+      micStopRequestedRef.current = false;
       const node = await ensureGraph();
       // If a stop landed between ensureGraph resolving and now, don't
       // open the gate — the worklet stays muted.

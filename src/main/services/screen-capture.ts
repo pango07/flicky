@@ -65,16 +65,13 @@ export async function captureDisplays(
       return s.display_id === String(display.id);
     }) ?? sources[captures.length]; // Fallback to index-based matching
 
-    if (!source) continue;
+    if (!source) {
+      console.warn(`[Flicky] no source matched display ${display.id}`);
+      continue;
+    }
 
     const thumbnail = source.thumbnail;
-    // When Screen Recording permission is missing on macOS, desktopCapturer
-    // silently returns sources whose thumbnail is empty (size 0×0) rather
-    // than throwing. Skip those so we don't ship an empty base64 image to
-    // the LLM and trigger a 400.
-    if (thumbnail.isEmpty()) continue;
     const size = thumbnail.getSize();
-    if (size.width === 0 || size.height === 0) continue;
 
     // On Windows/Linux with display scaling, the thumbnail is in physical
     // pixels but display.bounds is in logical pixels. We need to produce an
@@ -96,6 +93,17 @@ export async function captureDisplays(
 
     const resized = thumbnail.resize({ width: targetWidth, height: targetHeight });
     const jpegBuffer = resized.toJPEG(JPEG_QUALITY);
+    // Guard only against the case that actually causes Anthropic 400s:
+    // a zero-byte JPEG. Earlier broader checks (`isEmpty()`, `size===0`)
+    // were rejecting valid thumbnails on some macOS configurations.
+    if (jpegBuffer.length === 0) {
+      console.warn(
+        `[Flicky] display ${display.id}: JPEG encoded to 0 bytes ` +
+        `(thumbSize=${size.width}x${size.height}, target=${targetWidth}x${targetHeight}, ` +
+        `scaleFactor=${scaleFactor}); skipping`,
+      );
+      continue;
+    }
 
     // Determine if cursor is on this display
     const bounds = display.bounds;
