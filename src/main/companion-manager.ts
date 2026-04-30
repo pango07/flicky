@@ -512,12 +512,28 @@ export class CompanionManager {
       // Almost always means Screen Recording permission is missing on
       // macOS — desktopCapturer returns empty thumbnails in that case.
       // Surface a friendly response instead of letting an empty image
-      // 400 the upstream LLM call.
+      // 400 the upstream LLM call. Synthesize TTS too so the user
+      // hears the error even if their attention is on a different
+      // window than the panel.
+      const settings = settingsStore.getAll();
       const msg = process.platform === 'darwin'
         ? "i can't see your screen right now — give flicky screen recording permission in system settings, then quit and reopen the app."
         : "i can't see your screen right now — screen capture failed.";
       this.callbacks.onAiResponseChunk(msg);
       this.callbacks.onAiResponseComplete(msg);
+      if (settings.speakReplies && keyStore.getKeyStatus().elevenlabs) {
+        this.setVoiceState('responding');
+        try {
+          const audioBuffer = await this.tts.synthesize(msg, {
+            voiceId: settings.voiceId,
+            speed: settings.voiceSpeed,
+            stability: settings.voiceStability,
+          });
+          this.callbacks.onPlayAudio(audioBuffer);
+        } catch (err) {
+          console.error('TTS error on screen-capture failure path:', err);
+        }
+      }
       this.setVoiceState('idle');
       return;
     }

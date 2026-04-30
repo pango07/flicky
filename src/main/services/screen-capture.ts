@@ -21,17 +21,34 @@ export async function captureDisplays(
   const { cursorOnly = true } = opts;
   const allDisplays = screen.getAllDisplays();
   const cursorPoint = screen.getCursorScreenPoint();
-  const displays = cursorOnly
-    ? allDisplays.filter((d) => {
-        const b = d.bounds;
-        return (
-          cursorPoint.x >= b.x &&
-          cursorPoint.x < b.x + b.width &&
-          cursorPoint.y >= b.y &&
-          cursorPoint.y < b.y + b.height
-        );
-      })
-    : allDisplays;
+  let displays = allDisplays;
+  if (cursorOnly) {
+    const onCursor = allDisplays.filter((d) => {
+      const b = d.bounds;
+      return (
+        cursorPoint.x >= b.x &&
+        cursorPoint.x < b.x + b.width &&
+        cursorPoint.y >= b.y &&
+        cursorPoint.y < b.y + b.height
+      );
+    });
+    // Fall back to all displays if the cursor-only filter excludes
+    // everything (which can happen if the cursor is mid-transition,
+    // the OS returned a stale point right after a resolution change,
+    // or there's a multi-monitor topology we don't recognize). Better
+    // to send the model a screenshot of *some* screen than to bail
+    // and tell the user we can't see their screen at all.
+    if (onCursor.length > 0) {
+      displays = onCursor;
+    } else {
+      console.warn(
+        '[Flicky] cursor-only filter excluded every display ' +
+        `(cursor at ${cursorPoint.x},${cursorPoint.y}, ` +
+        `displays: ${allDisplays.map((d) => `${d.id}@${JSON.stringify(d.bounds)}`).join(' ')}). ` +
+        'Falling back to all displays.',
+      );
+    }
+  }
 
   // Get all screen sources
   const sources = await desktopCapturer.getSources({
@@ -100,6 +117,15 @@ export async function captureDisplays(
 
   // Sort so cursor screen is first (primary focus)
   captures.sort((a, b) => (b.isCursorScreen ? 1 : 0) - (a.isCursorScreen ? 1 : 0));
+
+  if (captures.length === 0) {
+    console.warn(
+      '[Flicky] captureDisplays produced zero screenshots. ' +
+      `displays=${displays.length}, sources=${sources.length}, ` +
+      `sourceIds=[${sources.map((s) => s.display_id || '""').join(',')}], ` +
+      `displayIds=[${displays.map((d) => d.id).join(',')}]`,
+    );
+  }
 
   return captures;
 }
