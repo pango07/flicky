@@ -105,10 +105,14 @@ export function createOverlayWindow(display: Display): BrowserWindow {
   loadPage(win, 'overlay');
 
   // Track which display this overlay covers so we can answer the
-  // renderer's `get-display-info` invocation from main.
-  overlayDisplayByWebContents.set(win.webContents.id, display);
+  // renderer's `get-display-info` invocation from main. Capture the
+  // webContents id up front — by the time `closed` fires, the
+  // BrowserWindow's webContents has been destroyed and accessing
+  // `.id` on it throws "Object has been destroyed".
+  const wcId = win.webContents.id;
+  overlayDisplayByWebContents.set(wcId, display);
   win.on('closed', () => {
-    overlayDisplayByWebContents.delete(win.webContents.id);
+    overlayDisplayByWebContents.delete(wcId);
   });
 
   // Push display info eagerly too — when the renderer is fast enough
