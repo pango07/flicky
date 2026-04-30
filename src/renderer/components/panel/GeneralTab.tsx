@@ -194,8 +194,8 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
             <div className="row-t">Allow Flicky to type for you</div>
             <div className="row-s">
               when off (default), Flicky copies text to your clipboard and you press paste.
-              when on, Flicky will type directly into the focused field
-              {' '}<em style={{ opacity: 0.7 }}>(native typer coming soon — currently still uses clipboard)</em>.
+              when on, Flicky types directly into the focused field
+              {isMac && <> — requires <strong>Accessibility</strong> permission on macOS</>}.
             </div>
           </div>
           <button

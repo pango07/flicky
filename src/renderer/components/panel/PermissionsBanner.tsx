@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react';
+import type { FlickySettings } from '../../../shared/types';
 
 type Perms = Record<string, boolean>;
 
-const ROWS: Array<{ kind: 'microphone' | 'screen'; label: string; reason: string }> = [
+interface Row {
+  kind: 'microphone' | 'screen' | 'accessibility';
+  label: string;
+  reason: string;
+  /** Settings-derived gate — only shown when this returns true. */
+  visibleWhen?: (s: FlickySettings | null) => boolean;
+}
+
+const ROWS: Row[] = [
   {
     kind: 'microphone',
     label: 'Microphone',
@@ -13,22 +22,41 @@ const ROWS: Array<{ kind: 'microphone' | 'screen'; label: string; reason: string
     label: 'Screen Recording',
     reason: 'so Flicky can see your screen and point at things',
   },
+  {
+    kind: 'accessibility',
+    label: 'Accessibility',
+    reason: 'so Flicky can type into the focused field for you',
+    // Only nag the user about this one when they've actually turned
+    // on auto-typing. Keeps the banner quiet for users who never
+    // care about that feature.
+    visibleWhen: (s) => !!s?.autoTypeEnabled,
+  },
 ];
 
 export function PermissionsBanner() {
   const [perms, setPerms] = useState<Perms | null>(null);
+  const [settings, setSettings] = useState<FlickySettings | null>(null);
 
   useEffect(() => {
     if (process.platform !== 'darwin') return;
     window.flicky.getPermissions().then(setPerms);
-    const unsub = window.flicky.onPermissionStatus(setPerms);
-    return () => { unsub(); };
+    window.flicky.getSettings().then(setSettings);
+    const unsubPerms = window.flicky.onPermissionStatus(setPerms);
+    const unsubSettings = window.flicky.onSettingsChanged(setSettings);
+    return () => {
+      unsubPerms();
+      unsubSettings();
+    };
   }, []);
 
   if (process.platform !== 'darwin') return null;
   if (!perms) return null;
 
-  const missing = ROWS.filter((r) => !perms[r.kind]);
+  const missing = ROWS.filter((r) => {
+    if (perms[r.kind]) return false;
+    if (r.visibleWhen && !r.visibleWhen(settings)) return false;
+    return true;
+  });
   if (missing.length === 0) return null;
 
   return (
@@ -36,7 +64,7 @@ export function PermissionsBanner() {
       <div className="perm-banner-head">
         <span className="perm-banner-title">Flicky needs a few permissions</span>
         <span className="perm-banner-sub">
-          macOS controls access per-app. Without these, Flicky can&apos;t hear you or see your screen.
+          macOS controls access per-app. Without these, Flicky can&apos;t hear you, see your screen, or type for you.
         </span>
       </div>
       <div className="perm-banner-rows">

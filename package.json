@@ -26,6 +26,7 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "posthog-node": "^4.0.0",
     "ws": "^8.18.0"
   },
@@ -62,8 +63,14 @@
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -78,7 +85,10 @@
     "win": {
       "icon": "assets/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64", "arm64"] }
+        {
+          "target": "nsis",
+          "arch": ["x64", "arm64"]
+        }
       ]
     },
     "nsis": {

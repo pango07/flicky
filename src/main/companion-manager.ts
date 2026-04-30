@@ -6,6 +6,7 @@ import { ElevenLabsTTS } from './services/elevenlabs-tts';
 import { createTranscriptionProvider, type TranscriptionProvider } from './services/transcription';
 import { captureAllDisplays } from './services/screen-capture';
 import { parseAllPointTags, parseTypeTags, TAG_STRIP_REGEX } from './services/element-detector';
+import { typeText, isAccessibilityGranted, promptAccessibility } from './services/auto-typer';
 import { ContextManager } from './services/context-manager';
 import * as settingsStore from './services/settings-store';
 import * as keyStore from './services/key-store';
@@ -199,6 +200,12 @@ export class CompanionManager {
 
   setAutoTypeEnabled(enabled: boolean): void {
     settingsStore.set('autoTypeEnabled', enabled);
+    // Flipping the toggle on is the right moment to nudge the user
+    // through the macOS Accessibility prompt — they just expressed
+    // intent to grant. No-op on other platforms / when already trusted.
+    if (enabled && !isAccessibilityGranted()) {
+      promptAccessibility();
+    }
     this.emitSettings();
   }
 
@@ -298,13 +305,19 @@ export class CompanionManager {
   // ── Permissions ──────────────────────────────────────────────────────
 
   async getPermissions(): Promise<Record<string, boolean>> {
-    const perms: Record<string, boolean> = { microphone: false, screen: false };
+    const perms: Record<string, boolean> = {
+      microphone: false,
+      screen: false,
+      accessibility: false,
+    };
     if (process.platform === 'darwin') {
       perms.microphone = systemPreferences.getMediaAccessStatus('microphone') === 'granted';
       perms.screen = systemPreferences.getMediaAccessStatus('screen') === 'granted';
+      perms.accessibility = isAccessibilityGranted();
     } else {
       perms.microphone = true;
       perms.screen = true;
+      perms.accessibility = true;
     }
     return perms;
   }
@@ -323,6 +336,18 @@ export class CompanionManager {
           'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
         );
       }
+      return;
+    }
+
+    if (kind === 'accessibility') {
+      // Calling with `true` adds Flicky to the Accessibility list and
+      // surfaces the OS dialog. The user still has to flip the checkbox
+      // themselves; we deeplink to the right pane in case the dialog
+      // got dismissed.
+      promptAccessibility();
+      shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+      );
       return;
     }
 
@@ -549,17 +574,26 @@ export class CompanionManager {
           );
         }
 
-        // [TYPE:...] tags. For now we always handle them via clipboard
-        // handoff regardless of the autoTypeEnabled setting, since the
-        // native auto-typer module isn't wired up yet. The setting is
-        // reserved for the upcoming follow-up.
+        // [TYPE:...] tags. If the user has opted into auto-typing AND
+        // the OS permission is in place, we send the keys directly via
+        // the native typer; otherwise we fall back to clipboard handoff.
+        // typeText() returns false on any failure so the user is never
+        // left with no way to act on the request.
         const typeTexts = parseTypeTags(fullText);
         for (const text of typeTexts) {
           if (!text) continue;
-          clipboard.writeText(text);
           const preview = text.length > 50 ? `${text.slice(0, 50)}…` : text;
-          console.log(`[Flicky] Type request → clipboard: "${preview}"`);
-          this.callbacks.onTypeFulfilled({ text, preview, autoTyped: false });
+          let autoTyped = false;
+          if (settings.autoTypeEnabled) {
+            autoTyped = await typeText(text);
+          }
+          if (!autoTyped) {
+            clipboard.writeText(text);
+          }
+          console.log(
+            `[Flicky] Type request → ${autoTyped ? 'auto-typed' : 'clipboard'}: "${preview}"`,
+          );
+          this.callbacks.onTypeFulfilled({ text, preview, autoTyped });
         }
 
         if (settings.speakReplies && keyStore.getKeyStatus().elevenlabs) {

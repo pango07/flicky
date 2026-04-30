@@ -402,11 +402,19 @@ export function OverlayApp() {
       {typeToast && isCursorOnThisDisplay && (
         <div className="type-toast" role="status">
           <div className="type-toast-row">
-            <span className="type-toast-icon" aria-hidden>📋</span>
+            <span className="type-toast-icon" aria-hidden>
+              {typeToast.autoTyped ? '⌨️' : '📋'}
+            </span>
             <div className="type-toast-text">
               <div className="type-toast-title">
-                Copied — press{' '}
-                <kbd>{process.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}</kbd> to paste
+                {typeToast.autoTyped ? (
+                  'Typed for you'
+                ) : (
+                  <>
+                    Copied — press{' '}
+                    <kbd>{process.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}</kbd> to paste
+                  </>
+                )}
               </div>
               <div className="type-toast-preview">&ldquo;{typeToast.preview}&rdquo;</div>
             </div>
