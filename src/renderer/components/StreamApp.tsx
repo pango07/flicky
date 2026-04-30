@@ -92,11 +92,6 @@ export function StreamApp() {
       currentIdRef.current = null;
     });
 
-    const unsubClear = window.flicky.onClearStream(() => {
-      setTurns([]);
-      currentIdRef.current = null;
-    });
-
     const unsubWalkthrough = window.flicky.onWalkthrough((w) => {
       setWalkthrough(w);
       if (!w) setActiveStep(null);
@@ -111,7 +106,6 @@ export function StreamApp() {
       unsubTranscript();
       unsubChunk();
       unsubComplete();
-      unsubClear();
       unsubWalkthrough();
       unsubWalkthroughStep();
     };
@@ -150,7 +144,10 @@ export function StreamApp() {
         <button
           className="btn"
           title="Clear the on-screen stream (chat history is untouched)"
-          onClick={() => window.flicky.clearStream()}
+          onClick={() => {
+            setTurns([]);
+            currentIdRef.current = null;
+          }}
         >
           clear
         </button>

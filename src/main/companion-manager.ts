@@ -65,6 +65,12 @@ export class CompanionManager {
   private voiceState: VoiceState = 'idle';
   private lastScreenshots: ScreenCapture[] = [];
   private isRecording = false;
+
+  /** Public read-only view used by main's PTT handler to keep its
+   *  toggle state in sync after a failed start. */
+  get recording(): boolean {
+    return this.isRecording;
+  }
   private reRegisterShortcut: ((accel: string) => boolean) | null = null;
   /**
    * Monotonic turn counter. A new PTT press bumps this; any still-running

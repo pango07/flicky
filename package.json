@@ -27,11 +27,9 @@
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
-    "posthog-node": "^4.0.0",
-    "ws": "^8.18.0"
+    "posthog-node": "^4.0.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.0",
     "@electron/notarize": "^2.5.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

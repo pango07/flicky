@@ -1,13 +1,23 @@
-import { PostHog } from 'posthog-node';
 import { app } from 'electron';
+import type { PostHog } from 'posthog-node';
+
+// posthog-node pulls a chunky transitive tree (axios / undici-ish bits).
+// Importing it eagerly added measurable cold-start latency in packaged
+// builds even though the default key is empty and analytics are off.
+// Lazy-import inside initAnalytics so the module only hits the JIT when
+// a real key is supplied.
 
 let client: PostHog | null = null;
 let distinctId = 'anonymous';
 
 export function initAnalytics(apiKey: string, host: string): void {
   if (!apiKey) return;
-  client = new PostHog(apiKey, { host });
-  distinctId = `flicky-${Date.now()}`;
+  void import('posthog-node').then(({ PostHog }) => {
+    client = new PostHog(apiKey, { host });
+    distinctId = `flicky-${Date.now()}`;
+  }).catch((err) => {
+    console.error('[Flicky] analytics init failed:', err);
+  });
 }
 
 function capture(event: string, properties?: Record<string, unknown>): void {

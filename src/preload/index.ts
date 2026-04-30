@@ -53,7 +53,6 @@ const api = {
     ipcRenderer.send(IPC.SET_STREAM_VISIBILITY, v),
   setStreamWindowBounds: (b: StreamWindowBounds): void =>
     ipcRenderer.send(IPC.SET_STREAM_WINDOW_BOUNDS, b),
-  clearStream: (): void => ipcRenderer.send(IPC.CLEAR_STREAM),
   setPushToTalkShortcut: (accel: string): void => ipcRenderer.send(IPC.SET_PUSH_TO_TALK_SHORTCUT, accel),
   setPttMode: (mode: PttMode): void => ipcRenderer.send(IPC.SET_PTT_MODE, mode),
   setAutoTypeEnabled: (enabled: boolean): void => ipcRenderer.send(IPC.SET_AUTO_TYPE_ENABLED, enabled),
@@ -200,12 +199,6 @@ const api = {
     const handler = (_e: Electron.IpcRendererEvent, entry: ChatEntry) => cb(entry);
     ipcRenderer.on(IPC.CHAT_ENTRY_ADDED, handler);
     return () => ipcRenderer.removeListener(IPC.CHAT_ENTRY_ADDED, handler);
-  },
-
-  onClearStream: (cb: () => void) => {
-    const handler = () => cb();
-    ipcRenderer.on(IPC.CLEAR_STREAM, handler);
-    return () => ipcRenderer.removeListener(IPC.CLEAR_STREAM, handler);
   },
 
   // ── Audio Capture (overlay ↔ main) ──────────────────────────────────

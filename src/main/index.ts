@@ -209,6 +209,11 @@ app.whenReady().then(() => {
         sendToOverlayById(currentWalkthroughTargetWcId, IPC.WALKTHROUGH_STEP, i);
       }
       sendToStream(IPC.WALKTHROUGH_STEP, i);
+      // The walkthrough scheduler emits step `null` after the last step
+      // dwell, just before emitting walkthrough(null). Clear the
+      // active flag here too so a status reader doesn't briefly observe
+      // walkthroughActive=true with no current step.
+      if (i === null) walkthroughActive = false;
     },
     onTypeFulfilled: (req) => {
       // Toast goes on a single overlay (cursor display) so the user
@@ -248,10 +253,13 @@ app.whenReady().then(() => {
     ]),
   );
 
-  // Create overlay windows for each display
+  // Create overlay windows for each display. Topology changes diff
+  // against the existing set so plugging in one new monitor doesn't
+  // tear down and rebuild every overlay (each rebuild has to reload
+  // the renderer bundle from scratch).
   rebuildOverlays();
-  screen.on('display-added', rebuildOverlays);
-  screen.on('display-removed', rebuildOverlays);
+  screen.on('display-added', () => syncOverlaysToDisplays());
+  screen.on('display-removed', () => syncOverlaysToDisplays());
 
   // Stream window is created lazily — the default `streamVisibility:'off'`
   // means a fresh-install user used to have an entire Chromium renderer
@@ -290,10 +298,18 @@ app.whenReady().then(() => {
     if (mode === 'toggle') {
       if (!pttActive) {
         pttActive = true;
-        companion.startPushToTalk();
+        // If startPushToTalk's underlying transcription provider fails
+        // to initialise, companion silently flips isRecording back to
+        // false. Reconcile the local toggle so the next tap retries
+        // the start path instead of issuing a stop on nothing.
+        void companion.startPushToTalk().then(() => {
+          pttActive = companion.recording;
+        });
       } else {
         pttActive = false;
-        companion.stopPushToTalk();
+        void companion.stopPushToTalk().then(() => {
+          pttActive = companion.recording;
+        });
       }
       return;
     }
@@ -390,7 +406,9 @@ app.whenReady().then(() => {
   ipcMain.on(IPC.SET_AUTO_TYPE_ENABLED, (_e, enabled: boolean) => companion.setAutoTypeEnabled(enabled));
   ipcMain.on(IPC.SET_STREAM_VISIBILITY, (_e, v: StreamVisibility) => companion.setStreamVisibility(v));
   ipcMain.on(IPC.SET_STREAM_WINDOW_BOUNDS, (_e, b: StreamWindowBounds) => companion.setStreamWindowBounds(b));
-  ipcMain.on(IPC.CLEAR_STREAM, () => sendToStream(IPC.CLEAR_STREAM));
+  // (clearStream used to be a needless renderer→main→same-renderer
+  // round trip — the stream's "clear" button now updates its own
+  // state directly, no IPC.)
   ipcMain.on(IPC.REQUEST_PERMISSION, (_e, kind) => companion.requestPermission(kind));
   ipcMain.on(IPC.OPEN_EXTERNAL, (_e, url) => shell.openExternal(url));
   ipcMain.on(IPC.QUIT_APP, () => app.quit());
@@ -579,6 +597,45 @@ function rebuildOverlays(): void {
   }
 
   overlayWindows = screen.getAllDisplays().map((display) => createOverlayWindow(display));
+  // Respect the persisted "Show cursor" setting — if the user has it
+  // turned off, the overlays are created but hidden so we can still
+  // route voice-state / element-detected events into their renderers
+  // without a visible window on screen.
+  applyOverlayVisibility(companion.getSettings().isClickyCursorEnabled);
+}
+
+/**
+ * Reconcile overlay windows with the current display topology. Only
+ * creates overlays for newly-added displays and destroys overlays for
+ * displays that are gone — leaves untouched overlays running so we
+ * don't reload all renderer bundles on every monitor change.
+ */
+function syncOverlaysToDisplays(): void {
+  const currentDisplays = screen.getAllDisplays();
+  const currentIds = new Set(currentDisplays.map((d) => d.id));
+
+  // Drop overlays whose display is gone.
+  const survivors: BrowserWindow[] = [];
+  for (const win of overlayWindows) {
+    const display = overlayDisplayByWebContents.get(win.webContents.id);
+    if (!display || !currentIds.has(display.id) || win.isDestroyed()) {
+      if (!win.isDestroyed()) win.destroy();
+      continue;
+    }
+    survivors.push(win);
+  }
+
+  // Add overlays for newly-attached displays.
+  const survivorDisplayIds = new Set(
+    survivors.map((w) => overlayDisplayByWebContents.get(w.webContents.id)?.id).filter((id): id is number => id !== undefined),
+  );
+  for (const display of currentDisplays) {
+    if (!survivorDisplayIds.has(display.id)) {
+      survivors.push(createOverlayWindow(display));
+    }
+  }
+
+  overlayWindows = survivors;
   // Respect the persisted "Show cursor" setting — if the user has it
   // turned off, the overlays are created but hidden so we can still
   // route voice-state / element-detected events into their renderers
