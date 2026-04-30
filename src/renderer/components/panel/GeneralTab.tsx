@@ -60,6 +60,7 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
     pct < 60 ? 'var(--fl-ok)' : pct < 85 ? 'var(--fl-warn)' : 'var(--fl-danger)';
 
   const shortcutKeys = settings.pushToTalkShortcut.split('+').filter(Boolean);
+  const isMac = process.platform === 'darwin';
 
   return (
     <>
@@ -73,7 +74,11 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
         <div className="row">
           <div className="row-main">
             <div className="row-t">Push to talk</div>
-            <div className="row-s">hold to speak from anywhere on your machine</div>
+            <div className="row-s">
+              {settings.pttMode === 'toggle'
+                ? 'tap once to start, tap again to stop'
+                : 'hold to speak, release to send'}
+            </div>
           </div>
           {editingShortcut ? (
             <ShortcutCapture
@@ -93,6 +98,36 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
               <span className="rec" onClick={() => setEditingShortcut(true)}>edit</span>
             </div>
           )}
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <div className="row-t">Trigger style</div>
+            <div className="row-s">
+              {isMac
+                ? 'macOS only supports tap-toggle — Electron can’t see the key release for hold-to-talk.'
+                : 'pick how the shortcut behaves'}
+            </div>
+          </div>
+          <div className="ptt-mode-seg" role="tablist" aria-label="Push-to-talk mode">
+            <button
+              role="tab"
+              aria-selected={settings.pttMode === 'hold'}
+              className={`seg ${settings.pttMode === 'hold' ? 'on' : ''}`}
+              disabled={isMac}
+              title={isMac ? 'Not supported on macOS' : ''}
+              onClick={() => window.flicky.setPttMode('hold')}
+            >
+              Hold
+            </button>
+            <button
+              role="tab"
+              aria-selected={settings.pttMode === 'toggle'}
+              className={`seg ${settings.pttMode === 'toggle' ? 'on' : ''}`}
+              onClick={() => window.flicky.setPttMode('toggle')}
+            >
+              Toggle
+            </button>
+          </div>
         </div>
       </div>
 
@@ -152,6 +187,21 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
             className={`toggle ${settings.isClickyCursorEnabled ? 'on' : ''}`}
             onClick={() => window.flicky.toggleCursor(!settings.isClickyCursorEnabled)}
             aria-label="Toggle cursor"
+          />
+        </div>
+        <div className="row">
+          <div className="row-main">
+            <div className="row-t">Allow Flicky to type for you</div>
+            <div className="row-s">
+              when off (default), Flicky copies text to your clipboard and you press paste.
+              when on, Flicky will type directly into the focused field
+              {' '}<em style={{ opacity: 0.7 }}>(native typer coming soon — currently still uses clipboard)</em>.
+            </div>
+          </div>
+          <button
+            className={`toggle ${settings.autoTypeEnabled ? 'on' : ''}`}
+            onClick={() => window.flicky.setAutoTypeEnabled(!settings.autoTypeEnabled)}
+            aria-label="Toggle auto-typing"
           />
         </div>
         <div className="row">

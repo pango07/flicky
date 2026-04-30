@@ -59,6 +59,9 @@
 
 .pointing-bubble {
   position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   padding: var(--space-sm) var(--space-md);
   background: var(--accent);
   color: white;
@@ -68,4 +71,136 @@
   white-space: nowrap;
   animation: bubble-in 0.2s ease-out;
   pointer-events: none;
+  box-shadow: 0 4px 14px rgba(29, 78, 216, 0.35);
+}
+
+.pointing-bubble .bubble-text { line-height: 1.2; }
+
+.pointing-bubble .step-badge {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.pointing-bubble .step-badge-total {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.75;
+  margin-left: 1px;
+}
+
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Target Halo ───────────────────────────────────────────────────── */
+/* Pulsing ring drawn at the target so the user's eye lands on it
+   even when the cursor itself is small. Sits underneath the cursor. */
+
+.target-halo {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  margin-left: -28px;
+  margin-top: -28px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(125, 211, 252, 0.85);
+  background: radial-gradient(closest-side, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0));
+  box-shadow:
+    0 0 0 0 rgba(59, 130, 246, 0.55),
+    0 0 22px rgba(59, 130, 246, 0.45);
+  animation: halo-pulse 1.4s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes halo-pulse {
+  0%   { transform: scale(0.7); opacity: 0.95; }
+  70%  { transform: scale(1.25); opacity: 0; box-shadow: 0 0 0 18px rgba(59, 130, 246, 0); }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+/* ── Type-fulfilled Toast ─────────────────────────────────────────── */
+/* Floats near the bottom-center of the display when Flicky has copied
+   text to the clipboard for the user to paste. Auto-hides after a
+   few seconds. */
+
+.type-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%);
+  max-width: 480px;
+  padding: 12px 16px;
+  background: rgba(20, 22, 28, 0.92);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  border-radius: 12px;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(59, 130, 246, 0.15) inset;
+  color: #e7e7ea;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  pointer-events: none;
+  animation: type-toast-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.type-toast-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.type-toast-icon {
+  font-size: 18px;
+  line-height: 1.2;
+  margin-top: 1px;
+}
+
+.type-toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.type-toast-title {
+  font-weight: 600;
+  color: #fff;
+  font-size: 13px;
+}
+
+.type-toast-title kbd {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  margin: 0 1px;
+}
+
+.type-toast-preview {
+  color: rgba(231, 231, 234, 0.7);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 440px;
+}
+
+@keyframes type-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, 0) scale(1); }
 }

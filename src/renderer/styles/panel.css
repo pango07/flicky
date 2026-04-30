@@ -511,6 +511,39 @@ button.provider-pick:hover {
   color: var(--fl-ink);
 }
 
+/* ── PTT mode segmented control ─────────────────────────────────── */
+.ptt-mode-seg {
+  display: inline-flex;
+  padding: 3px;
+  background: var(--fl-surface-2);
+  border: 1px solid var(--fl-border);
+  border-radius: 10px;
+  gap: 2px;
+}
+.ptt-mode-seg .seg {
+  font-size: 12px; font-weight: 600;
+  color: var(--fl-muted);
+  background: transparent;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.ptt-mode-seg .seg:hover:not(:disabled):not(.on) {
+  color: var(--fl-ink-soft);
+  background: rgba(255,255,255,0.04);
+}
+.ptt-mode-seg .seg.on {
+  color: var(--fl-ink);
+  background: var(--fl-surface);
+  box-shadow: 0 0 0 1px var(--fl-border-strong);
+}
+.ptt-mode-seg .seg:disabled {
+  color: var(--fl-dim);
+  cursor: not-allowed;
+}
+
 /* ── Context meter ──────────────────────────────────────────────── */
 .context-bar {
   padding: 14px;

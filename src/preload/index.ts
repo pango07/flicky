@@ -9,9 +9,11 @@ import type {
   FlickySettings,
   VoiceState,
   TranscriptionResult,
-  DetectedElement,
+  Walkthrough,
+  TypeRequest,
   ReasoningDepth,
   ReplyTone,
+  PttMode,
   MemoryStats,
   ChatEntry,
   StreamVisibility,
@@ -47,6 +49,8 @@ const api = {
     ipcRenderer.send(IPC.SET_STREAM_WINDOW_BOUNDS, b),
   clearStream: (): void => ipcRenderer.send(IPC.CLEAR_STREAM),
   setPushToTalkShortcut: (accel: string): void => ipcRenderer.send(IPC.SET_PUSH_TO_TALK_SHORTCUT, accel),
+  setPttMode: (mode: PttMode): void => ipcRenderer.send(IPC.SET_PTT_MODE, mode),
+  setAutoTypeEnabled: (enabled: boolean): void => ipcRenderer.send(IPC.SET_AUTO_TYPE_ENABLED, enabled),
   suspendPushToTalkShortcut: (): void => ipcRenderer.send(IPC.SUSPEND_PUSH_TO_TALK_SHORTCUT),
   resumePushToTalkShortcut: (): void => ipcRenderer.send(IPC.RESUME_PUSH_TO_TALK_SHORTCUT),
 
@@ -144,10 +148,22 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.AI_RESPONSE_COMPLETE, handler);
   },
 
-  onElementDetected: (cb: (element: DetectedElement | null) => void) => {
-    const handler = (_e: Electron.IpcRendererEvent, el: DetectedElement | null) => cb(el);
-    ipcRenderer.on(IPC.ELEMENT_DETECTED, handler);
-    return () => ipcRenderer.removeListener(IPC.ELEMENT_DETECTED, handler);
+  onWalkthrough: (cb: (walkthrough: Walkthrough | null) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, w: Walkthrough | null) => cb(w);
+    ipcRenderer.on(IPC.WALKTHROUGH, handler);
+    return () => ipcRenderer.removeListener(IPC.WALKTHROUGH, handler);
+  },
+
+  onWalkthroughStep: (cb: (index: number | null) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, i: number | null) => cb(i);
+    ipcRenderer.on(IPC.WALKTHROUGH_STEP, handler);
+    return () => ipcRenderer.removeListener(IPC.WALKTHROUGH_STEP, handler);
+  },
+
+  onTypeFulfilled: (cb: (req: TypeRequest) => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, req: TypeRequest) => cb(req);
+    ipcRenderer.on(IPC.TYPE_FULFILLED, handler);
+    return () => ipcRenderer.removeListener(IPC.TYPE_FULFILLED, handler);
   },
 
   onCursorPosition: (cb: (pos: { x: number; y: number }) => void) => {

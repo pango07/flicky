@@ -121,3 +121,86 @@ html, body, #root {
 @keyframes stream-blink {
   to { visibility: hidden; }
 }
+
+/* ── Walkthrough card ───────────────────────────────────────────── */
+.walkthrough-card {
+  margin: 4px 0 14px;
+  padding: 12px 14px 10px;
+  background: rgba(37, 99, 235, 0.10);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(29, 78, 216, 0.18);
+}
+.walkthrough-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.walkthrough-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: #cfe5ff;
+}
+.walkthrough-progress {
+  font-size: 11px;
+  color: rgba(207, 229, 255, 0.65);
+}
+.walkthrough-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.walkthrough-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  transition: background 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+}
+.walkthrough-step.pending { opacity: 0.55; }
+.walkthrough-step.done {
+  opacity: 0.7;
+  background: rgba(255, 255, 255, 0.04);
+}
+.walkthrough-step.active {
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.55);
+  transform: translateX(2px);
+}
+.walkthrough-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  flex-shrink: 0;
+}
+.walkthrough-step.done .walkthrough-num {
+  background: rgba(142, 189, 154, 0.35);
+  color: #d6f0dd;
+}
+.walkthrough-step.active .walkthrough-num {
+  background: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.3);
+}
+.walkthrough-label {
+  font-size: 13px;
+  color: #e7e7ea;
+  line-height: 1.35;
+}
+.walkthrough-step.done .walkthrough-label {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.25);
+}

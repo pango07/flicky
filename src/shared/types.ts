@@ -46,6 +46,9 @@ export type ReasoningDepth = 'off' | 'medium' | 'deep';
 /** System-prompt variant. */
 export type ReplyTone = 'concise' | 'friendly' | 'detailed';
 
+/** How the push-to-talk shortcut behaves. */
+export type PttMode = 'hold' | 'toggle';
+
 export interface ConversationTurn {
   role: 'user' | 'assistant';
   content: string;
@@ -58,6 +61,31 @@ export interface DetectedElement {
   y: number;
   label: string;
   screenIndex: number;
+}
+
+export interface WalkthroughStep extends DetectedElement {
+  /** 1-based position in the walkthrough sequence. */
+  step: number;
+  /** Total number of steps in the walkthrough. */
+  total: number;
+}
+
+export interface Walkthrough {
+  steps: WalkthroughStep[];
+}
+
+/**
+ * A request from the model to type text into whatever field the user
+ * has focused. Currently fulfilled via clipboard handoff (text copied
+ * to clipboard, user presses ⌘V); a future "auto-type" mode will use
+ * a native key-event hook to type directly when the user has opted in.
+ */
+export interface TypeRequest {
+  text: string;
+  /** What was typed/copied — surfaced in the toast UI for confirmation. */
+  preview: string;
+  /** True when the text was actually auto-typed; false when copied. */
+  autoTyped: boolean;
 }
 
 // ── Local Connections (Ollama / OpenAI-compatible local endpoints) ─────
@@ -179,6 +207,21 @@ export interface FlickySettings {
   launchAtLogin: boolean;
   pushToTalkShortcut: string;
   /**
+   * How the push-to-talk shortcut behaves:
+   *   'hold'   — record while the key is held, send on release
+   *               (Windows/Linux only; macOS falls back to 'toggle' because
+   *               Electron's globalShortcut exposes no key-up event there)
+   *   'toggle' — first tap starts recording, second tap stops and sends
+   */
+  pttMode: PttMode;
+  /**
+   * If true, Flicky may type text directly into the focused field when
+   * the model emits a [TYPE:...] tag. Requires Accessibility permission
+   * on macOS and the native auto-typer module to be available; falls
+   * back to clipboard handoff in either case. Off by default.
+   */
+  autoTypeEnabled: boolean;
+  /**
    * Controls the transparent stream window:
    * - 'off'       — never shown
    * - 'responses' — shown only while Flicky is actively answering
@@ -214,6 +257,8 @@ export const DEFAULT_SETTINGS: FlickySettings = {
   isClickyCursorEnabled: true,
   launchAtLogin: false,
   pushToTalkShortcut: 'Ctrl+Alt+X',
+  pttMode: 'hold',
+  autoTypeEnabled: false,
   streamVisibility: 'off',
   streamWindowBounds: null,
 
@@ -232,6 +277,9 @@ export const IPC = {
   AI_RESPONSE_CHUNK: 'ai-response-chunk',
   AI_RESPONSE_COMPLETE: 'ai-response-complete',
   ELEMENT_DETECTED: 'element-detected',
+  WALKTHROUGH: 'walkthrough',
+  WALKTHROUGH_STEP: 'walkthrough-step',
+  TYPE_FULFILLED: 'type-fulfilled',
   CURSOR_POSITION: 'cursor-position',
   SETTINGS_CHANGED: 'settings-changed',
   PERMISSION_STATUS: 'permission-status',
@@ -254,6 +302,8 @@ export const IPC = {
   TOGGLE_CURSOR: 'toggle-cursor',
   SET_LAUNCH_AT_LOGIN: 'set-launch-at-login',
   SET_PUSH_TO_TALK_SHORTCUT: 'set-push-to-talk-shortcut',
+  SET_PTT_MODE: 'set-ptt-mode',
+  SET_AUTO_TYPE_ENABLED: 'set-auto-type-enabled',
   SET_STREAM_VISIBILITY: 'set-stream-visibility',
   SET_STREAM_WINDOW_BOUNDS: 'set-stream-window-bounds',
   CLEAR_STREAM: 'clear-stream',

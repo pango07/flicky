@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChatEntry, TranscriptionResult, VoiceState } from '../../shared/types';
+import type {
+  ChatEntry,
+  TranscriptionResult,
+  VoiceState,
+  Walkthrough,
+} from '../../shared/types';
 
 interface Turn {
   id: string;
@@ -23,6 +28,8 @@ function makeId(): string {
 export function StreamApp() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
+  const [activeStep, setActiveStep] = useState<number | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   /** Tracks the in-progress turn so chunks can append to it. */
   const currentIdRef = useRef<string | null>(null);
@@ -90,12 +97,23 @@ export function StreamApp() {
       currentIdRef.current = null;
     });
 
+    const unsubWalkthrough = window.flicky.onWalkthrough((w) => {
+      setWalkthrough(w);
+      if (!w) setActiveStep(null);
+    });
+
+    const unsubWalkthroughStep = window.flicky.onWalkthroughStep((i) => {
+      setActiveStep(i);
+    });
+
     return () => {
       unsubState();
       unsubTranscript();
       unsubChunk();
       unsubComplete();
       unsubClear();
+      unsubWalkthrough();
+      unsubWalkthroughStep();
     };
   }, []);
 
@@ -128,11 +146,43 @@ export function StreamApp() {
         </button>
       </div>
       <div className="stream-body" ref={bodyRef}>
-        {turns.length === 0 ? (
+        {walkthrough && walkthrough.steps.length > 0 && (
+          <div className="walkthrough-card">
+            <div className="walkthrough-head">
+              <span className="walkthrough-title">Walkthrough</span>
+              <span className="walkthrough-progress">
+                {activeStep === null
+                  ? `${walkthrough.steps.length} step${walkthrough.steps.length === 1 ? '' : 's'}`
+                  : `step ${activeStep + 1} of ${walkthrough.steps.length}`}
+              </span>
+            </div>
+            <ol className="walkthrough-steps">
+              {walkthrough.steps.map((s, i) => {
+                const state =
+                  activeStep === null
+                    ? 'pending'
+                    : i < activeStep
+                      ? 'done'
+                      : i === activeStep
+                        ? 'active'
+                        : 'pending';
+                return (
+                  <li key={i} className={`walkthrough-step ${state}`}>
+                    <span className="walkthrough-num">
+                      {state === 'done' ? '✓' : i + 1}
+                    </span>
+                    <span className="walkthrough-label">{s.label}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        )}
+        {turns.length === 0 && !walkthrough ? (
           <div className="stream-empty">
             Hold the push-to-talk shortcut and start talking. The live Q/A will appear here.
           </div>
-        ) : (
+        ) : turns.length === 0 ? null : (
           turns.map((t) => (
             <div key={t.id} className="stream-turn">
               <div className="stream-label">You</div>

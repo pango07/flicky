@@ -1,11 +1,11 @@
-import { app, systemPreferences, shell, desktopCapturer } from 'electron';
+import { app, systemPreferences, shell, desktopCapturer, clipboard } from 'electron';
 import { ClaudeAPI } from './services/claude-api';
 import { OpenAIAPI } from './services/openai-api';
 import { OllamaAPI } from './services/ollama-api';
 import { ElevenLabsTTS } from './services/elevenlabs-tts';
 import { createTranscriptionProvider, type TranscriptionProvider } from './services/transcription';
 import { captureAllDisplays } from './services/screen-capture';
-import { parsePointTags } from './services/element-detector';
+import { parseAllPointTags, parseTypeTags, TAG_STRIP_REGEX } from './services/element-detector';
 import { ContextManager } from './services/context-manager';
 import * as settingsStore from './services/settings-store';
 import * as keyStore from './services/key-store';
@@ -19,7 +19,9 @@ import type {
   MindProvider,
   GroqTranscriptionModel,
   TranscriptionResult,
-  DetectedElement,
+  Walkthrough,
+  PttMode,
+  TypeRequest,
   ScreenCapture,
   ApiKeyName,
   ReasoningDepth,
@@ -35,7 +37,10 @@ export interface CompanionCallbacks {
   onTranscriptUpdate: (result: TranscriptionResult) => void;
   onAiResponseChunk: (chunk: string) => void;
   onAiResponseComplete: (fullText: string) => void;
-  onElementDetected: (element: DetectedElement | null) => void;
+  onWalkthrough: (walkthrough: Walkthrough | null) => void;
+  /** Active step index (0-based) inside the current walkthrough, or null when idle. */
+  onWalkthroughStep: (index: number | null) => void;
+  onTypeFulfilled: (request: TypeRequest) => void;
   onSettingsChanged: (settings: FlickySettings) => void;
   onMemoryStatsChanged: (stats: MemoryStats) => void;
   onChatEntryAdded: (entry: ChatEntry) => void;
@@ -67,6 +72,8 @@ export class CompanionManager {
    */
   private turnId = 0;
   private currentAbort: AbortController | null = null;
+  /** Pending walkthrough step timers, cleared on new turn or end-of-walkthrough. */
+  private walkthroughTimers: ReturnType<typeof setTimeout>[] = [];
   /**
    * If startRecording is in flight, other callers (typically a quick-release
    * stopPushToTalk) await this before deciding whether to stop. Without it,
@@ -182,6 +189,16 @@ export class CompanionManager {
       console.warn('[Flicky] Failed to register shortcut', accelerator, '— reverting to', previous);
       this.reRegisterShortcut(previous);
     }
+    this.emitSettings();
+  }
+
+  setPttMode(mode: PttMode): void {
+    settingsStore.set('pttMode', mode);
+    this.emitSettings();
+  }
+
+  setAutoTypeEnabled(enabled: boolean): void {
+    settingsStore.set('autoTypeEnabled', enabled);
     this.emitSettings();
   }
 
@@ -359,6 +376,46 @@ export class CompanionManager {
     await this.stopRecordingAndProcess();
   }
 
+  private clearWalkthroughTimers(): void {
+    for (const t of this.walkthroughTimers) clearTimeout(t);
+    this.walkthroughTimers = [];
+  }
+
+  /**
+   * Schedule a walkthrough so overlay + stream + any other surface stay
+   * in lockstep. Emits the full step list once, then a step index per
+   * step at computed times, then clears with `null` after the last step.
+   *
+   * Per-step dwell scales with caption length so longer instructions
+   * stay on screen long enough to read; floor of 2.6s, ceiling of 5.5s.
+   */
+  private startWalkthrough(walkthrough: Walkthrough, isCurrent: () => boolean): void {
+    this.clearWalkthroughTimers();
+    this.callbacks.onWalkthrough(walkthrough);
+
+    const dwellFor = (label: string): number =>
+      Math.max(2600, Math.min(5500, 1800 + label.length * 80));
+
+    let cursor = 0;
+    walkthrough.steps.forEach((step, i) => {
+      const start = cursor;
+      const t = setTimeout(() => {
+        if (!isCurrent()) return;
+        this.callbacks.onWalkthroughStep(i);
+      }, start);
+      this.walkthroughTimers.push(t);
+      cursor += dwellFor(step.label);
+    });
+
+    // After the last step has had its dwell, clear the walkthrough.
+    const endTimer = setTimeout(() => {
+      if (!isCurrent()) return;
+      this.callbacks.onWalkthroughStep(null);
+      this.callbacks.onWalkthrough(null);
+    }, cursor);
+    this.walkthroughTimers.push(endTimer);
+  }
+
   private async startRecording(): Promise<void> {
     // Bump the turn and abort any in-flight work from the previous one
     // so the user's new message supersedes whatever Flicky was doing.
@@ -367,6 +424,9 @@ export class CompanionManager {
       this.currentAbort.abort();
       this.currentAbort = null;
     }
+    this.clearWalkthroughTimers();
+    this.callbacks.onWalkthrough(null);
+    this.callbacks.onWalkthroughStep(null);
 
     this.isRecording = true;
     this.setVoiceState('listening');
@@ -417,6 +477,19 @@ export class CompanionManager {
       console.error('Screen capture failed:', err);
       this.lastScreenshots = [];
     }
+    if (this.lastScreenshots.length === 0) {
+      // Almost always means Screen Recording permission is missing on
+      // macOS — desktopCapturer returns empty thumbnails in that case.
+      // Surface a friendly response instead of letting an empty image
+      // 400 the upstream LLM call.
+      const msg = process.platform === 'darwin'
+        ? "i can't see your screen right now — give flicky screen recording permission in system settings, then quit and reopen the app."
+        : "i can't see your screen right now — screen capture failed.";
+      this.callbacks.onAiResponseChunk(msg);
+      this.callbacks.onAiResponseComplete(msg);
+      this.setVoiceState('idle');
+      return;
+    }
 
     const settings = settingsStore.getAll();
     const myTurnId = this.turnId;
@@ -446,7 +519,7 @@ export class CompanionManager {
         if (!isCurrent()) return;
         analytics.trackAiResponseReceived(fullText);
 
-        const cleanText = fullText.replace(/\[POINT:[^\]]+\]/g, '').trim();
+        const cleanText = fullText.replace(TAG_STRIP_REGEX, '').trim();
         this.callbacks.onAiResponseComplete(cleanText);
 
         await this.context.recordExchange(result.text, cleanText, {
@@ -462,10 +535,31 @@ export class CompanionManager {
         });
         this.callbacks.onChatEntryAdded(entry);
 
-        const element = parsePointTags(fullText, this.lastScreenshots);
-        if (element) {
-          this.callbacks.onElementDetected(element);
-          analytics.trackElementPointed(element.label);
+        const walkthrough = parseAllPointTags(fullText, this.lastScreenshots);
+        if (walkthrough) {
+          console.log(
+            `[Flicky] Walkthrough: ${walkthrough.steps.length} step(s) →`,
+            walkthrough.steps.map((s) => `${s.step}/${s.total} "${s.label}"`).join(', '),
+          );
+          this.startWalkthrough(walkthrough, isCurrent);
+          analytics.trackElementPointed(
+            walkthrough.steps.length > 1
+              ? `${walkthrough.steps[0].label} (+${walkthrough.steps.length - 1} more)`
+              : walkthrough.steps[0].label,
+          );
+        }
+
+        // [TYPE:...] tags. For now we always handle them via clipboard
+        // handoff regardless of the autoTypeEnabled setting, since the
+        // native auto-typer module isn't wired up yet. The setting is
+        // reserved for the upcoming follow-up.
+        const typeTexts = parseTypeTags(fullText);
+        for (const text of typeTexts) {
+          if (!text) continue;
+          clipboard.writeText(text);
+          const preview = text.length > 50 ? `${text.slice(0, 50)}…` : text;
+          console.log(`[Flicky] Type request → clipboard: "${preview}"`);
+          this.callbacks.onTypeFulfilled({ text, preview, autoTyped: false });
         }
 
         if (settings.speakReplies && keyStore.getKeyStatus().elevenlabs) {
@@ -488,9 +582,6 @@ export class CompanionManager {
 
         if (!isCurrent()) return;
         this.setVoiceState('idle');
-        setTimeout(() => {
-          if (isCurrent()) this.callbacks.onElementDetected(null);
-        }, 6000);
       },
       onError: (err: Error) => {
         if (!isCurrent()) return;

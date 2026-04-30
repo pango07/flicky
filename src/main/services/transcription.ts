@@ -44,6 +44,25 @@ export class GroqWhisperProvider implements TranscriptionProvider {
     const arrayBuf = wavBuffer.buffer.slice(wavBuffer.byteOffset, wavBuffer.byteOffset + wavBuffer.byteLength) as ArrayBuffer;
     formData.append('file', new Blob([arrayBuf], { type: 'audio/wav' }), 'recording.wav');
     formData.append('model', model);
+    // English-only locks Whisper out of language detection (which is the
+    // single biggest source of garbled output on short voice clips). If
+    // we ever want multilingual, lift this from the user's locale.
+    formData.append('language', 'en');
+    // Temperature 0 = deterministic decoding. Higher temps invent words
+    // when the audio is unclear; for short commands we want fewer halluc-
+    // inations, even if it means cutting an unintelligible word.
+    formData.append('temperature', '0');
+    // The "prompt" biases the model's vocab. Loading it with the kind
+    // of words a user actually says to a screen-aware assistant fixes a
+    // lot of the weirdness — proper-noun apps ("Slack", "Notion"),
+    // pointing verbs ("click", "highlight"), and generic UI nouns get
+    // far higher prior probability and stop being mis-transcribed as
+    // homophones (e.g. "click" → "clique"). Whisper accepts up to 224
+    // tokens here; keep it short and dense.
+    formData.append(
+      'prompt',
+      "Flicky, click, tap, open, close, switch, highlight, select, search, paste, file, folder, window, tab, button, link, screen, cursor, Slack, Chrome, Notion, VS Code, Figma, Gmail.",
+    );
 
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { VoiceState, DetectedElement } from '../../shared/types';
+import type { VoiceState, WalkthroughStep, TypeRequest } from '../../shared/types';
 import { Waveform } from './Waveform';
 
 // Offset the companion cursor ~1/5 inch (≈19px at 96dpi) down-right
@@ -27,13 +27,16 @@ type CursorMode = 'following' | 'navigating' | 'holding' | 'returning';
 export function OverlayApp() {
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
-  const [detectedElement, setDetectedElement] = useState<DetectedElement | null>(null);
+  const [currentStep, setCurrentStep] = useState<WalkthroughStep | null>(null);
   const [pointingPhrase, setPointingPhrase] = useState('');
   const [cursorMode, setCursorMode] = useState<CursorMode>('following');
   const [companionPos, setCompanionPos] = useState({ x: 0, y: 0 });
   const [isCursorOnThisDisplay, setIsCursorOnThisDisplay] = useState(false);
+  const [typeToast, setTypeToast] = useState<TypeRequest | null>(null);
+  const typeToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const displayRef = useRef<{ id: number; bounds: { x: number; y: number; width: number; height: number } } | null>(null);
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepsRef = useRef<WalkthroughStep[]>([]);
   const returnAnimRef = useRef<number | null>(null);
   const cursorPosRef = useRef({ x: 0, y: 0 });
   const companionPosRef = useRef({ x: 0, y: 0 });
@@ -213,36 +216,53 @@ export function OverlayApp() {
           setCursorPos(pos);
         }
       }),
-      window.flicky.onElementDetected((el) => {
-        if (el) {
-          if (returnAnimRef.current) {
-            cancelAnimationFrame(returnAnimRef.current);
-            returnAnimRef.current = null;
-          }
-          if (holdTimerRef.current) {
-            clearTimeout(holdTimerRef.current);
-            holdTimerRef.current = null;
-          }
-
-          setPointingPhrase(randomPhrase());
-          setDetectedElement(el);
-
-          const bounds = displayRef.current?.bounds;
-          const localTarget = {
-            x: el.x - (bounds?.x ?? 0),
-            y: el.y - (bounds?.y ?? 0),
-          };
-          setCompanionPosSync(localTarget);
-          setCursorModeSync('navigating');
-
-          setTimeout(() => setCursorModeSync('holding'), 650);
-        } else {
-          setDetectedElement(null);
+      window.flicky.onWalkthrough((w) => {
+        // Cache the steps. Main drives advancement via WALKTHROUGH_STEP.
+        if (returnAnimRef.current) {
+          cancelAnimationFrame(returnAnimRef.current);
+          returnAnimRef.current = null;
+        }
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = null;
+        }
+        if (!w) {
+          stepsRef.current = [];
+          setCurrentStep(null);
           holdTimerRef.current = setTimeout(() => {
             holdTimerRef.current = null;
             startReturnAnimation();
-          }, 3000);
+          }, 1500);
+          return;
         }
+        stepsRef.current = w.steps;
+      }),
+      window.flicky.onTypeFulfilled((req) => {
+        if (typeToastTimerRef.current) clearTimeout(typeToastTimerRef.current);
+        setTypeToast(req);
+        typeToastTimerRef.current = setTimeout(() => {
+          setTypeToast(null);
+          typeToastTimerRef.current = null;
+        }, 5000);
+      }),
+      window.flicky.onWalkthroughStep((i) => {
+        if (i === null) {
+          // Walkthrough ending — the WALKTHROUGH(null) event will
+          // schedule the return animation. Just clear current step UI.
+          setCurrentStep(null);
+          return;
+        }
+        const step = stepsRef.current[i];
+        if (!step) return;
+        setPointingPhrase(randomPhrase());
+        setCurrentStep(step);
+        const bounds = displayRef.current?.bounds;
+        setCompanionPosSync({
+          x: step.x - (bounds?.x ?? 0),
+          y: step.y - (bounds?.y ?? 0),
+        });
+        setCursorModeSync('navigating');
+        setTimeout(() => setCursorModeSync('holding'), 650);
       }),
     ];
 
@@ -250,6 +270,7 @@ export function OverlayApp() {
       unsubDisplayInfo();
       unsubs.forEach((u) => u());
       if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+      if (typeToastTimerRef.current) clearTimeout(typeToastTimerRef.current);
       if (returnAnimRef.current) cancelAnimationFrame(returnAnimRef.current);
     };
   }, [setCursorModeSync, setCompanionPosSync, startReturnAnimation]);
@@ -258,7 +279,8 @@ export function OverlayApp() {
     if (voiceState === 'listening') {
       // User started a new turn — interrupt anything Flicky was saying.
       stopCurrentTts();
-      setDetectedElement(null);
+      setCurrentStep(null);
+      stepsRef.current = [];
       if (holdTimerRef.current) {
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
@@ -281,12 +303,20 @@ export function OverlayApp() {
       ? 'left 0.05s linear, top 0.05s linear'
       : 'none';
 
-  void detectedElement;
+  const showAnnotation = (isNavigating || isHolding) && currentStep !== null;
+  const isMultiStep = (currentStep?.total ?? 0) > 1;
 
   return (
     <div className="overlay-container">
       {showOnThisDisplay && (
         <>
+          {showAnnotation && (
+            <div
+              className="target-halo"
+              style={{ left: companionPos.x, top: companionPos.y }}
+            />
+          )}
+
           <div
             className={`cursor-triangle ${isNavigating || isHolding ? 'navigating' : ''}`}
             style={{
@@ -347,7 +377,7 @@ export function OverlayApp() {
             />
           )}
 
-          {(isNavigating || isHolding) && pointingPhrase && (
+          {showAnnotation && (
             <div
               className="pointing-bubble"
               style={{
@@ -355,10 +385,33 @@ export function OverlayApp() {
                 top: companionPos.y - 8,
               }}
             >
-              {pointingPhrase}
+              {isMultiStep && (
+                <span className="step-badge">
+                  {currentStep!.step}
+                  <span className="step-badge-total">/{currentStep!.total}</span>
+                </span>
+              )}
+              <span className="bubble-text">
+                {isMultiStep ? currentStep!.label : pointingPhrase}
+              </span>
             </div>
           )}
         </>
+      )}
+
+      {typeToast && isCursorOnThisDisplay && (
+        <div className="type-toast" role="status">
+          <div className="type-toast-row">
+            <span className="type-toast-icon" aria-hidden>📋</span>
+            <div className="type-toast-text">
+              <div className="type-toast-title">
+                Copied — press{' '}
+                <kbd>{process.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}</kbd> to paste
+              </div>
+              <div className="type-toast-preview">&ldquo;{typeToast.preview}&rdquo;</div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -23,6 +23,8 @@ let streamWindow: BrowserWindow | null = null;
 let companion: CompanionManager;
 let isAppQuitting = false;
 let lastVoiceState = 'idle';
+/** Whether a walkthrough is currently playing (steps 1..N animating). */
+let walkthroughActive = false;
 
 app.on('before-quit', () => { isAppQuitting = true; });
 
@@ -89,6 +91,17 @@ function sendToOverlays(channel: string, ...args: unknown[]): void {
   }
 }
 
+/**
+ * Pick a single overlay to receive an event. Used for things that must
+ * not duplicate across displays — TTS audio playback being the canonical
+ * case (broadcasting to all overlays plays the buffer once per display
+ * and audibly doubles).
+ */
+function sendToOneOverlay(channel: string, ...args: unknown[]): void {
+  const target = overlayWindows.find((w) => !w.isDestroyed());
+  if (target) target.webContents.send(channel, ...args);
+}
+
 function sendToStream(channel: string, ...args: unknown[]): void {
   if (streamWindow && !streamWindow.isDestroyed()) {
     streamWindow.webContents.send(channel, ...args);
@@ -120,13 +133,32 @@ app.whenReady().then(() => {
       sendToPanel(IPC.AI_RESPONSE_COMPLETE, text);
       sendToStream(IPC.AI_RESPONSE_COMPLETE, text);
     },
-    onElementDetected: (el) => sendToOverlays(IPC.ELEMENT_DETECTED, el),
+    onWalkthrough: (w) => {
+      walkthroughActive = !!w;
+      sendToOverlays(IPC.WALKTHROUGH, w);
+      sendToStream(IPC.WALKTHROUGH, w);
+      // Keep the stream visible across the walkthrough in 'responses' mode,
+      // even after voice state has returned to idle. When the walkthrough
+      // ends we re-evaluate based on the current voice state.
+      if (w) applyStreamVisibility(companion.getSettings().streamVisibility);
+      else updateStreamForVoiceState(lastVoiceState);
+    },
+    onWalkthroughStep: (i) => {
+      sendToOverlays(IPC.WALKTHROUGH_STEP, i);
+      sendToStream(IPC.WALKTHROUGH_STEP, i);
+    },
+    onTypeFulfilled: (req) => {
+      // Toast goes on a single overlay (cursor display) so the user
+      // sees one notification, not one per monitor.
+      sendToOneOverlay(IPC.TYPE_FULFILLED, req);
+      sendToStream(IPC.TYPE_FULFILLED, req);
+    },
     onSettingsChanged: (s) => sendToPanel(IPC.SETTINGS_CHANGED, s),
     onMemoryStatsChanged: (stats) => sendToPanel(IPC.MEMORY_STATS, stats),
     onChatEntryAdded: (entry) => sendToPanel(IPC.CHAT_ENTRY_ADDED, entry),
     onStartAudioCapture: () => sendToOverlays(AUDIO_IPC.START_CAPTURE),
     onStopAudioCapture: () => sendToOverlays(AUDIO_IPC.STOP_CAPTURE),
-    onPlayAudio: (buf) => sendToOverlays('play-audio', buf),
+    onPlayAudio: (buf) => sendToOneOverlay('play-audio', buf),
     onCursorVisibilityChanged: (enabled) => applyOverlayVisibility(enabled),
     onStreamVisibilityChanged: (v) => applyStreamVisibility(v),
   });
@@ -182,22 +214,25 @@ app.whenReady().then(() => {
 
   // Register global push-to-talk shortcut.
   //
-  // Windows/Linux: globalShortcut fires repeatedly on OS key-repeat while
-  // the accelerator is held, so we debounce — first press starts recording,
-  // subsequent repeats are ignored, and we stop after no fires for 250 ms
-  // (meaning the key was released).
+  // Two modes, chosen by the `pttMode` setting:
+  //   'hold'   — Windows/Linux only. globalShortcut fires repeatedly on
+  //              OS key-repeat while the accelerator is held; we start on
+  //              the first fire and stop after 250 ms of silence (release).
+  //   'toggle' — first tap starts, second tap stops. Required on macOS,
+  //              where globalShortcut fires exactly once per press and
+  //              Electron exposes no key-up event.
   //
-  // macOS: globalShortcut fires exactly once on press; the OS does not
-  // repeat global accelerators and Electron exposes no key-up event. We
-  // can't implement true press-and-hold without a native key-event hook,
-  // so fall back to toggle: first tap starts, second tap stops.
+  // On macOS we always behave as 'toggle' regardless of the stored setting,
+  // so a user who set 'hold' on another platform doesn't get a stuck mic.
+  const isMac = process.platform === 'darwin';
   let pttDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pttActive = false;
   let currentShortcut = '';
-  const isMac = process.platform === 'darwin';
 
   const pttHandler = () => {
-    if (isMac) {
+    const mode = isMac ? 'toggle' : companion.getSettings().pttMode;
+
+    if (mode === 'toggle') {
       if (!pttActive) {
         pttActive = true;
         companion.startPushToTalk();
@@ -207,6 +242,8 @@ app.whenReady().then(() => {
       }
       return;
     }
+
+    // 'hold' mode (Windows/Linux): rely on key-repeat, debounce on silence.
     if (pttDebounceTimer) {
       clearTimeout(pttDebounceTimer);
       pttDebounceTimer = null;
@@ -281,6 +318,8 @@ app.whenReady().then(() => {
   ipcMain.on(IPC.TOGGLE_CURSOR, (_e, enabled) => companion.toggleCursor(enabled));
   ipcMain.on(IPC.SET_LAUNCH_AT_LOGIN, (_e, enabled) => companion.setLaunchAtLogin(enabled));
   ipcMain.on(IPC.SET_PUSH_TO_TALK_SHORTCUT, (_e, accel: string) => companion.setPushToTalkShortcut(accel));
+  ipcMain.on(IPC.SET_PTT_MODE, (_e, mode) => companion.setPttMode(mode));
+  ipcMain.on(IPC.SET_AUTO_TYPE_ENABLED, (_e, enabled: boolean) => companion.setAutoTypeEnabled(enabled));
   ipcMain.on(IPC.SET_STREAM_VISIBILITY, (_e, v: StreamVisibility) => companion.setStreamVisibility(v));
   ipcMain.on(IPC.SET_STREAM_WINDOW_BOUNDS, (_e, b: StreamWindowBounds) => companion.setStreamWindowBounds(b));
   ipcMain.on(IPC.CLEAR_STREAM, () => sendToStream(IPC.CLEAR_STREAM));
@@ -488,7 +527,11 @@ function updateStreamForVoiceState(state: string): void {
   if (!streamWindow || streamWindow.isDestroyed()) return;
   const v = companion.getSettings().streamVisibility;
   if (v !== 'responses') return;
-  const active = state === 'listening' || state === 'processing' || state === 'responding';
+  const active =
+    state === 'listening' ||
+    state === 'processing' ||
+    state === 'responding' ||
+    walkthroughActive;
   if (active) {
     streamWindow.showInactive();
   } else if (state === 'idle') {

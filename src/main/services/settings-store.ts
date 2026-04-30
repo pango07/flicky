@@ -13,6 +13,7 @@ import type {
   StreamVisibility,
   StreamWindowBounds,
   LocalConnection,
+  PttMode,
 } from '../../shared/types';
 
 /**
@@ -38,6 +39,8 @@ export interface StoredSettings {
   isClickyCursorEnabled: boolean;
   launchAtLogin: boolean;
   pushToTalkShortcut: string;
+  pttMode: PttMode;
+  autoTypeEnabled: boolean;
   streamVisibility: StreamVisibility;
   streamWindowBounds: StreamWindowBounds | null;
 
@@ -64,6 +67,10 @@ const DEFAULTS: StoredSettings = {
   isClickyCursorEnabled: true,
   launchAtLogin: false,
   pushToTalkShortcut: 'Ctrl+Alt+X',
+  // Default to 'toggle' on macOS because Electron's globalShortcut on
+  // darwin can't detect key-up; 'hold' would record forever there.
+  pttMode: process.platform === 'darwin' ? 'toggle' : 'hold',
+  autoTypeEnabled: false,
   streamVisibility: 'off',
   streamWindowBounds: null,
 
