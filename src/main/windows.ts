@@ -43,10 +43,11 @@ export function createPanelWindow(): BrowserWindow {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      // Preload only uses contextBridge + ipcRenderer, both available
-      // in a sandboxed renderer. Sandboxing closes off Node API surface
-      // and gives the renderer process tighter OS-level isolation.
-      sandbox: true,
+      // sandbox: true caused renderers to fail to render (blank screen)
+      // — likely a require-resolution issue with our relative preload
+      // path. Reverted; we'd need to bundle the preload as a single
+      // self-contained file (esbuild) before flipping this on safely.
+      sandbox: false,
     },
   });
 
@@ -88,7 +89,7 @@ export function createOverlayWindow(display: Display): BrowserWindow {
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -159,7 +160,7 @@ export function createStreamWindow(
       preload: getPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
