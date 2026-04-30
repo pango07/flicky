@@ -197,6 +197,15 @@ export function OverlayApp() {
   }, [cursorPos, cursorMode, setCompanionPosSync]);
 
   useEffect(() => {
+    // Pull display info eagerly. The push from main is also wired (below),
+    // but if we mount after that one-shot fires, we'd never learn our
+    // bounds and would render the cursor on every display.
+    window.flicky.getDisplayInfo().then((info) => {
+      if (info && !displayRef.current) {
+        displayRef.current = { id: info.id, bounds: info.bounds };
+      }
+    });
+
     const unsubDisplayInfo = window.flicky.onDisplayInfo((info) => {
       displayRef.current = { id: info.id, bounds: info.bounds };
     });
@@ -204,6 +213,14 @@ export function OverlayApp() {
     const unsubs = [
       window.flicky.onVoiceStateChanged(setVoiceState),
       window.flicky.onCursorPosition((pos) => {
+        // Main now sends a `{ off: true }` pulse to whichever overlay
+        // previously owned the cursor when it leaves that display.
+        // We stop receiving regular updates entirely once the cursor
+        // is off-display, which is why this signal is needed at all.
+        if ((pos as { off?: boolean }).off) {
+          setIsCursorOnThisDisplay(false);
+          return;
+        }
         const bounds = displayRef.current?.bounds;
         if (bounds) {
           const onThis =
@@ -212,7 +229,10 @@ export function OverlayApp() {
           setIsCursorOnThisDisplay(onThis);
           setCursorPos({ x: pos.x - bounds.x, y: pos.y - bounds.y });
         } else {
-          setIsCursorOnThisDisplay(true);
+          // Bounds unknown — hide the companion rather than risk
+          // showing it on every display. Will flip on as soon as
+          // display-info arrives.
+          setIsCursorOnThisDisplay(false);
           setCursorPos(pos);
         }
       }),
@@ -295,7 +315,23 @@ export function OverlayApp() {
 
   const isNavigating = cursorMode === 'navigating';
   const isHolding = cursorMode === 'holding';
-  const showOnThisDisplay = isCursorOnThisDisplay || isNavigating || isHolding;
+
+  // Walkthrough steps are always *on* one specific display (the one the
+  // cursor was on when the screenshot was taken). Render the annotated
+  // cursor only on that display so users with multiple monitors don't
+  // see the blue cursor flying around on a screen the step isn't on.
+  const isStepOnThisDisplay = (() => {
+    if (!currentStep) return false;
+    const b = displayRef.current?.bounds;
+    if (!b) return false;
+    return (
+      currentStep.x >= b.x && currentStep.x < b.x + b.width &&
+      currentStep.y >= b.y && currentStep.y < b.y + b.height
+    );
+  })();
+
+  const showOnThisDisplay =
+    isNavigating || isHolding ? isStepOnThisDisplay : isCursorOnThisDisplay;
 
   const cursorTransition = isNavigating
     ? 'left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)'
@@ -303,7 +339,7 @@ export function OverlayApp() {
       ? 'left 0.05s linear, top 0.05s linear'
       : 'none';
 
-  const showAnnotation = (isNavigating || isHolding) && currentStep !== null;
+  const showAnnotation = (isNavigating || isHolding) && isStepOnThisDisplay;
   const isMultiStep = (currentStep?.total ?? 0) > 1;
 
   return (

@@ -1,7 +1,12 @@
 import { app, BrowserWindow, Tray, Menu, globalShortcut, screen, ipcMain, shell, nativeImage } from 'electron';
 import path from 'path';
 import { CompanionManager } from './companion-manager';
-import { createPanelWindow, createOverlayWindow, createStreamWindow } from './windows';
+import {
+  createPanelWindow,
+  createOverlayWindow,
+  createStreamWindow,
+  overlayDisplayByWebContents,
+} from './windows';
 import { IPC, type StreamVisibility, type StreamWindowBounds, type LocalConnection } from '../shared/types';
 import { AUDIO_IPC } from './services/audio-capture';
 import * as chatHistory from './services/chat-history-store';
@@ -25,6 +30,25 @@ let isAppQuitting = false;
 let lastVoiceState = 'idle';
 /** Whether a walkthrough is currently playing (steps 1..N animating). */
 let walkthroughActive = false;
+/** webContents.id of the overlay receiving the active walkthrough. */
+let currentWalkthroughTargetWcId: number | null = null;
+/** Perms-poll lifecycle, controlled by panel visibility. */
+let permsTimer: ReturnType<typeof setInterval> | null = null;
+const startPermsPoll = (): void => {
+  if (permsTimer) return;
+  const tick = async (): Promise<void> => {
+    if (!companion) return;
+    const perms = await companion.getPermissions();
+    sendToPanel(IPC.PERMISSION_STATUS, perms);
+  };
+  void tick();
+  permsTimer = setInterval(() => { void tick(); }, 5000);
+};
+const stopPermsPoll = (): void => {
+  if (!permsTimer) return;
+  clearInterval(permsTimer);
+  permsTimer = null;
+};
 
 app.on('before-quit', () => { isAppQuitting = true; });
 
@@ -102,6 +126,24 @@ function sendToOneOverlay(channel: string, ...args: unknown[]): void {
   if (target) target.webContents.send(channel, ...args);
 }
 
+function sendToOverlayById(wcId: number, channel: string, ...args: unknown[]): void {
+  const target = overlayWindows.find((w) => !w.isDestroyed() && w.webContents.id === wcId);
+  if (target) target.webContents.send(channel, ...args);
+}
+
+function findOverlayContainingPoint(pos: { x: number; y: number }): BrowserWindow | undefined {
+  return overlayWindows.find((w) => {
+    if (w.isDestroyed()) return false;
+    const display = overlayDisplayByWebContents.get(w.webContents.id);
+    if (!display) return false;
+    const b = display.bounds;
+    return (
+      pos.x >= b.x && pos.x < b.x + b.width &&
+      pos.y >= b.y && pos.y < b.y + b.height
+    );
+  });
+}
+
 function sendToStream(channel: string, ...args: unknown[]): void {
   if (streamWindow && !streamWindow.isDestroyed()) {
     streamWindow.webContents.send(channel, ...args);
@@ -135,7 +177,26 @@ app.whenReady().then(() => {
     },
     onWalkthrough: (w) => {
       walkthroughActive = !!w;
-      sendToOverlays(IPC.WALKTHROUGH, w);
+      // The walkthrough plays on exactly one display — the cursor
+      // display at the time of capture. Compute that target overlay
+      // up front and only send WALKTHROUGH / WALKTHROUGH_STEP to it.
+      // The other overlays would have ignored the events anyway via
+      // their `isStepOnThisDisplay` check; skipping the IPC saves
+      // wakeups on idle screens.
+      if (w && w.steps.length > 0) {
+        const first = w.steps[0];
+        const target = findOverlayContainingPoint({ x: first.x, y: first.y });
+        currentWalkthroughTargetWcId = target?.webContents.id ?? null;
+      } else {
+        currentWalkthroughTargetWcId = null;
+      }
+      if (currentWalkthroughTargetWcId !== null) {
+        sendToOverlayById(currentWalkthroughTargetWcId, IPC.WALKTHROUGH, w);
+      } else if (!w) {
+        // On clear with no known target, broadcast so any overlay holding
+        // stale walkthrough state resets cleanly.
+        sendToOverlays(IPC.WALKTHROUGH, w);
+      }
       sendToStream(IPC.WALKTHROUGH, w);
       // Keep the stream visible across the walkthrough in 'responses' mode,
       // even after voice state has returned to idle. When the walkthrough
@@ -144,7 +205,9 @@ app.whenReady().then(() => {
       else updateStreamForVoiceState(lastVoiceState);
     },
     onWalkthroughStep: (i) => {
-      sendToOverlays(IPC.WALKTHROUGH_STEP, i);
+      if (currentWalkthroughTargetWcId !== null) {
+        sendToOverlayById(currentWalkthroughTargetWcId, IPC.WALKTHROUGH_STEP, i);
+      }
       sendToStream(IPC.WALKTHROUGH_STEP, i);
     },
     onTypeFulfilled: (req) => {
@@ -156,8 +219,13 @@ app.whenReady().then(() => {
     onSettingsChanged: (s) => sendToPanel(IPC.SETTINGS_CHANGED, s),
     onMemoryStatsChanged: (stats) => sendToPanel(IPC.MEMORY_STATS, stats),
     onChatEntryAdded: (entry) => sendToPanel(IPC.CHAT_ENTRY_ADDED, entry),
-    onStartAudioCapture: () => sendToOverlays(AUDIO_IPC.START_CAPTURE),
-    onStopAudioCapture: () => sendToOverlays(AUDIO_IPC.STOP_CAPTURE),
+    // Mic capture must NEVER fan out across overlays — each overlay
+    // would open its own getUserMedia + AudioContext and stream chunks
+    // back, which on a multi-monitor setup made companion-manager append
+    // the same audio N times into one buffer. Whisper then transcribed
+    // an interleaved mess. Single overlay only.
+    onStartAudioCapture: () => sendToOneOverlay(AUDIO_IPC.START_CAPTURE),
+    onStopAudioCapture: () => sendToOneOverlay(AUDIO_IPC.STOP_CAPTURE),
     onPlayAudio: (buf) => sendToOneOverlay('play-audio', buf),
     onCursorVisibilityChanged: (enabled) => applyOverlayVisibility(enabled),
     onStreamVisibilityChanged: (v) => applyStreamVisibility(v),
@@ -185,23 +253,10 @@ app.whenReady().then(() => {
   screen.on('display-added', rebuildOverlays);
   screen.on('display-removed', rebuildOverlays);
 
-  // Create the transparent stream window (hidden until the user opts in).
-  {
-    const settings = companion.getSettings();
-    streamWindow = createStreamWindow(settings.streamWindowBounds);
-    streamWindow.on('close', (e) => {
-      // Don't let the user actually close the stream — just hide it and
-      // flip the setting off so the toggle in General reflects reality.
-      if (!isAppQuitting) {
-        e.preventDefault();
-        streamWindow?.hide();
-        companion.setStreamVisibility('off');
-      }
-    });
-    streamWindow.on('moved', persistStreamBounds);
-    streamWindow.on('resized', persistStreamBounds);
-    applyStreamVisibility(settings.streamVisibility);
-  }
+  // Stream window is created lazily — the default `streamVisibility:'off'`
+  // means a fresh-install user used to have an entire Chromium renderer
+  // running in the background just to receive IPC nobody would ever see.
+  applyStreamVisibility(companion.getSettings().streamVisibility);
 
   // Sync the OS login-item state with our stored preference. Handles
   // the case where the user disables the login item externally (e.g.
@@ -302,6 +357,19 @@ app.whenReady().then(() => {
   ipcMain.on(IPC.RESUME_PUSH_TO_TALK_SHORTCUT, () => resumePttShortcut());
 
   // ── IPC Handlers ───────────────────────────────────────────────────
+
+  // Answer "what display am I on?" from any overlay renderer. Used to
+  // recover from the race where display-info push fires before the
+  // renderer has a listener attached.
+  ipcMain.handle('get-display-info', (e) => {
+    const display = overlayDisplayByWebContents.get(e.sender.id);
+    if (!display) return null;
+    return {
+      id: display.id,
+      bounds: display.bounds,
+      scaleFactor: display.scaleFactor,
+    };
+  });
 
   ipcMain.handle(IPC.GET_SETTINGS, () => companion.getSettings());
   ipcMain.handle(IPC.GET_PERMISSIONS, () => companion.getPermissions());
@@ -422,17 +490,40 @@ app.whenReady().then(() => {
     companion.handleAudioChunk(buffer);
   });
 
-  // Track cursor position for overlay rendering
+  // Track cursor position for overlay rendering. Three optimisations vs
+  // the naive 60-fps fanout:
+  //   1. Skip the entire poll when "Show cursor" is off.
+  //   2. 30 fps is plenty — the cursor companion has its own 50 ms CSS
+  //      transition, so doubling the rate just doubled the IPC traffic.
+  //   3. Only send to the overlay whose display the cursor is on. When
+  //      the cursor leaves a display we send one "off" pulse to the old
+  //      overlay so its `isCursorOnThisDisplay` state flips false; we
+  //      stop sending updates to it until the cursor re-enters.
+  let lastCursorTargetWcId: number | null = null;
   setInterval(() => {
+    if (!companion.getSettings().isClickyCursorEnabled) {
+      // If we previously had a target, tell it to clear so a stale
+      // companion cursor doesn't linger on the last screen.
+      if (lastCursorTargetWcId !== null) {
+        sendToOverlayById(lastCursorTargetWcId, IPC.CURSOR_POSITION, { x: -9999, y: -9999, off: true });
+        lastCursorTargetWcId = null;
+      }
+      return;
+    }
     const pos = screen.getCursorScreenPoint();
-    sendToOverlays(IPC.CURSOR_POSITION, pos);
-  }, 16); // ~60fps
+    const targetWin = findOverlayContainingPoint(pos);
+    const targetId = targetWin?.webContents.id ?? null;
+    if (targetId !== lastCursorTargetWcId && lastCursorTargetWcId !== null) {
+      sendToOverlayById(lastCursorTargetWcId, IPC.CURSOR_POSITION, { x: -9999, y: -9999, off: true });
+    }
+    if (targetWin) {
+      targetWin.webContents.send(IPC.CURSOR_POSITION, pos);
+    }
+    lastCursorTargetWcId = targetId;
+  }, 33);
 
-  // Poll permissions
-  setInterval(async () => {
-    const perms = await companion.getPermissions();
-    sendToPanel(IPC.PERMISSION_STATUS, perms);
-  }, 1500);
+  // Perms poll lifecycle is hoisted to module scope above; togglePanel()
+  // wires it to the panel window's show/hide events on first creation.
 
   // Open the main window on first launch.
   togglePanel();
@@ -473,6 +564,9 @@ function togglePanel(): void {
       panelWindow?.hide();
     }
   });
+  // Permissions polling is only useful while the banner can render.
+  panelWindow.on('show', startPermsPoll);
+  panelWindow.on('hide', stopPermsPoll);
 
   panelWindow.show();
   panelWindow.focus();
@@ -504,27 +598,58 @@ function applyOverlayVisibility(enabled: boolean): void {
 }
 
 /**
+ * Lazily create the stream window. Returns the live BrowserWindow.
+ * The window is destroyed (not hidden) when the user sets visibility
+ * back to 'off', so calling this again will spin up a fresh instance.
+ */
+function ensureStreamWindow(): BrowserWindow {
+  if (streamWindow && !streamWindow.isDestroyed()) return streamWindow;
+  const bounds = companion.getSettings().streamWindowBounds;
+  streamWindow = createStreamWindow(bounds);
+  streamWindow.on('close', (e) => {
+    if (!isAppQuitting) {
+      e.preventDefault();
+      streamWindow?.hide();
+      companion.setStreamVisibility('off');
+    }
+  });
+  streamWindow.on('moved', persistStreamBounds);
+  streamWindow.on('resized', persistStreamBounds);
+  return streamWindow;
+}
+
+function destroyStreamWindow(): void {
+  if (!streamWindow) return;
+  if (!streamWindow.isDestroyed()) {
+    // The 'close' handler intercepts user closes and re-shows + flips the
+    // visibility setting; we want a real teardown here, so destroy directly.
+    streamWindow.destroy();
+  }
+  streamWindow = null;
+}
+
+/**
  * Show or hide the stream window based on the current visibility
  * setting. 'responses' mode is refined further by updateStreamForVoiceState
  * which flicks it on when Flicky is thinking / speaking.
  */
 function applyStreamVisibility(v: StreamVisibility): void {
-  if (!streamWindow || streamWindow.isDestroyed()) return;
-  if (v === 'always') {
-    streamWindow.showInactive();
-  } else if (v === 'off') {
-    streamWindow.hide();
-  } else {
-    // 'responses' — reconcile with whatever Flicky is currently doing
-    // so switching *into* this mode immediately reflects the real state
-    // (hide if idle, show if mid-turn) instead of waiting for the next
-    // voice state transition.
-    updateStreamForVoiceState(lastVoiceState);
+  if (v === 'off') {
+    destroyStreamWindow();
+    return;
   }
+  if (v === 'always') {
+    ensureStreamWindow().showInactive();
+    return;
+  }
+  // 'responses' — reconcile with whatever Flicky is currently doing
+  // so switching *into* this mode immediately reflects the real state.
+  // We don't pre-create the window here; updateStreamForVoiceState will
+  // spin it up the first time something happens worth showing.
+  updateStreamForVoiceState(lastVoiceState);
 }
 
 function updateStreamForVoiceState(state: string): void {
-  if (!streamWindow || streamWindow.isDestroyed()) return;
   const v = companion.getSettings().streamVisibility;
   if (v !== 'responses') return;
   const active =
@@ -533,9 +658,9 @@ function updateStreamForVoiceState(state: string): void {
     state === 'responding' ||
     walkthroughActive;
   if (active) {
-    streamWindow.showInactive();
+    ensureStreamWindow().showInactive();
   } else if (state === 'idle') {
-    streamWindow.hide();
+    if (streamWindow && !streamWindow.isDestroyed()) streamWindow.hide();
   }
 }
 

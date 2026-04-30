@@ -204,6 +204,17 @@ const api = {
 
   // ── Audio Capture (overlay ↔ main) ──────────────────────────────────
   // ── Overlay / display info ────────────────────────────────────────
+  /**
+   * Pull the display info for the overlay window making the call.
+   * Lets renderers recover when the eagerly-pushed display-info event
+   * fires before their listener attached.
+   */
+  getDisplayInfo: (): Promise<{
+    id: number;
+    bounds: { x: number; y: number; width: number; height: number };
+    scaleFactor: number;
+  } | null> => ipcRenderer.invoke('get-display-info'),
+
   onDisplayInfo: (
     cb: (info: {
       id: number;

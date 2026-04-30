@@ -83,7 +83,15 @@ function getFilePath(): string {
   return path.join(app.getPath('userData'), 'flicky-settings.json');
 }
 
-function read(): StoredSettings {
+/**
+ * In-memory cache. The settings file is the single source of truth across
+ * runs, but within a run we own it — no external writers — so re-reading
+ * disk on every `get`/`set` is wasted I/O. We hydrate once on first access
+ * and keep the cache in sync with every `set`.
+ */
+let cache: StoredSettings | null = null;
+
+function readDisk(): StoredSettings {
   try {
     const raw = fs.readFileSync(getFilePath(), 'utf-8');
     return { ...DEFAULTS, ...JSON.parse(raw) };
@@ -92,20 +100,29 @@ function read(): StoredSettings {
   }
 }
 
+function ensureLoaded(): StoredSettings {
+  if (cache === null) cache = readDisk();
+  return cache;
+}
+
 function write(data: StoredSettings): void {
   writeFileAtomic(getFilePath(), JSON.stringify(data, null, 2));
 }
 
 export function get<K extends keyof StoredSettings>(key: K): StoredSettings[K] {
-  return read()[key];
+  return ensureLoaded()[key];
 }
 
 export function set<K extends keyof StoredSettings>(key: K, value: StoredSettings[K]): void {
-  const data = read();
+  const data = ensureLoaded();
   data[key] = value;
+  // Persist after mutating the cache. If the disk write fails we still
+  // have the new value in memory for the rest of the session — the next
+  // launch will revert, which matches the previous behavior.
   write(data);
 }
 
 export function getAll(): StoredSettings {
-  return read();
+  // Shallow copy so callers can't mutate the cache through the returned ref.
+  return { ...ensureLoaded() };
 }

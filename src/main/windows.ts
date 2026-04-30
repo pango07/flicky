@@ -51,6 +51,15 @@ export function createPanelWindow(): BrowserWindow {
   return win;
 }
 
+/**
+ * Maps each overlay's webContents id back to the Display it covers, so
+ * `ipcMain.handle('get-display-info')` in main/index.ts can answer the
+ * renderer's request based on which window the IPC came from. Solved
+ * the race where the renderer's display-info listener attaches after
+ * the one-shot push has already fired.
+ */
+export const overlayDisplayByWebContents = new Map<number, Display>();
+
 /** A transparent, click-through overlay covering one display. */
 export function createOverlayWindow(display: Display): BrowserWindow {
   const { x, y, width, height } = display.bounds;
@@ -91,7 +100,16 @@ export function createOverlayWindow(display: Display): BrowserWindow {
 
   loadPage(win, 'overlay');
 
-  // Pass display info to overlay so it knows its coordinate space
+  // Track which display this overlay covers so we can answer the
+  // renderer's `get-display-info` invocation from main.
+  overlayDisplayByWebContents.set(win.webContents.id, display);
+  win.on('closed', () => {
+    overlayDisplayByWebContents.delete(win.webContents.id);
+  });
+
+  // Push display info eagerly too — when the renderer is fast enough
+  // to subscribe before this fires, it gets the info immediately and
+  // can skip the invoke roundtrip on mount.
   win.webContents.once('did-finish-load', () => {
     win.webContents.send('display-info', {
       id: display.id,
