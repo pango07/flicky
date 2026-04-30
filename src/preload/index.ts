@@ -25,6 +25,12 @@ import type {
 import type { OllamaTestResult } from '../main/services/ollama-api';
 
 const api = {
+  // The host platform, resolved at runtime in the main process so it's
+  // correct even when the renderer was cross-compiled (a CI build of a
+  // macOS dmg on Linux would otherwise leak the build host's platform
+  // through Vite's compile-time `define`).
+  platform: process.platform as NodeJS.Platform,
+
   // ── Settings ───────────────────────────────────────────────────────
   getSettings: (): Promise<FlickySettings> => ipcRenderer.invoke(IPC.GET_SETTINGS),
 

@@ -470,7 +470,7 @@ export function OverlayApp() {
                 ) : (
                   <>
                     Copied — press{' '}
-                    <kbd>{process.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}</kbd> to paste
+                    <kbd>{window.flicky.platform === 'darwin' ? '⌘V' : 'Ctrl+V'}</kbd> to paste
                   </>
                 )}
               </div>

@@ -117,11 +117,21 @@ export function StreamApp() {
     };
   }, []);
 
-  // Auto-scroll to bottom whenever content grows.
+  // Auto-scroll to bottom while content grows — but only if the user
+  // is already pinned at the bottom. If they've scrolled up to read an
+  // earlier turn, we leave their viewport alone instead of yanking them
+  // back. The scroll write itself is deferred to rAF so a long token
+  // stream doesn't force synchronous layout on every chunk.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    const PIN_THRESHOLD_PX = 24;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom > PIN_THRESHOLD_PX) return;
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
   }, [turns]);
 
   const statusLabel =

@@ -60,7 +60,7 @@ export function GeneralTab({ settings, memory }: GeneralTabProps) {
     pct < 60 ? 'var(--fl-ok)' : pct < 85 ? 'var(--fl-warn)' : 'var(--fl-danger)';
 
   const shortcutKeys = settings.pushToTalkShortcut.split('+').filter(Boolean);
-  const isMac = process.platform === 'darwin';
+  const isMac = window.flicky.platform === 'darwin';
 
   return (
     <>

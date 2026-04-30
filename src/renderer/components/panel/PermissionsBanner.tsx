@@ -38,7 +38,7 @@ export function PermissionsBanner() {
   const [settings, setSettings] = useState<FlickySettings | null>(null);
 
   useEffect(() => {
-    if (process.platform !== 'darwin') return;
+    if (window.flicky.platform !== 'darwin') return;
     window.flicky.getPermissions().then(setPerms);
     window.flicky.getSettings().then(setSettings);
     const unsubPerms = window.flicky.onPermissionStatus(setPerms);
@@ -49,7 +49,7 @@ export function PermissionsBanner() {
     };
   }, []);
 
-  if (process.platform !== 'darwin') return null;
+  if (window.flicky.platform !== 'darwin') return null;
   if (!perms) return null;
 
   const missing = ROWS.filter((r) => {
