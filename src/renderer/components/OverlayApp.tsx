@@ -2,6 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { VoiceState, WalkthroughStep, TypeRequest } from '../../shared/types';
 import { Waveform } from './Waveform';
 
+// Vite resolves `new URL(..., import.meta.url)` at build time and emits
+// the worklet as a static asset. The `.js` file is hand-written plain
+// JS (worklets must be), so it isn't part of the TS compilation unit;
+// we only need its URL to feed `audioWorklet.addModule()`.
+const captureWorkletUrl = new URL('../audio-capture-worklet.js', import.meta.url).href;
+
 // Offset the companion cursor ~1/5 inch (≈19px at 96dpi) down-right
 // of the real mouse so the tip doesn't sit directly on top of it.
 const FOLLOW_OFFSET_X = 14;
@@ -42,12 +48,16 @@ export function OverlayApp() {
   const companionPosRef = useRef({ x: 0, y: 0 });
 
   // ── Mic capture ──────────────────────────────────────────────────────
+  // The audio graph (stream → AudioContext → AudioWorkletNode → destination)
+  // is built once on first PTT and kept warm across turns. Start/stop just
+  // toggles a flag inside the worklet so we don't pay getUserMedia or
+  // worklet-module-load latency on every press.
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const scriptNodeRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  /** true while getUserMedia hasn't resolved yet. */
+  /** true while getUserMedia / addModule are in flight. */
   const micStartingRef = useRef(false);
-  /** set by stopMic so a pending start can abort before attaching. */
+  /** set by stopMic so a pending start can bail before attaching. */
   const micStopRequestedRef = useRef(false);
 
   // ── TTS playback (cancelable) ───────────────────────────────────────
@@ -64,60 +74,61 @@ export function OverlayApp() {
   }, []);
 
   useEffect(() => {
-    const startMic = async () => {
-      // Ignore overlapping starts.
-      if (micStartingRef.current || mediaStreamRef.current) return;
+    const ensureGraph = async (): Promise<AudioWorkletNode | null> => {
+      if (workletNodeRef.current) return workletNodeRef.current;
+      if (micStartingRef.current) return null;
       micStartingRef.current = true;
       micStopRequestedRef.current = false;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
         });
-
-        // A stop may have arrived before getUserMedia resolved; if so,
-        // release the stream immediately instead of attaching it.
+        // If a stop arrived while we were waiting on getUserMedia, the
+        // user has already released the key. Don't bother building the
+        // graph; the next press will re-enter and rebuild.
         if (micStopRequestedRef.current) {
           stream.getTracks().forEach((t) => t.stop());
-          return;
+          return null;
         }
-
-        mediaStreamRef.current = stream;
-
         const ctx = new AudioContext({ sampleRate: 16000 });
-        audioCtxRef.current = ctx;
+        await ctx.audioWorklet.addModule(captureWorkletUrl);
         const source = ctx.createMediaStreamSource(stream);
-
-        const processor = ctx.createScriptProcessor(4096, 1, 1);
-        scriptNodeRef.current = processor;
-
-        processor.onaudioprocess = (e) => {
-          const float32 = e.inputBuffer.getChannelData(0);
-          const pcm16 = new Int16Array(float32.length);
-          for (let i = 0; i < float32.length; i++) {
-            const s = Math.max(-1, Math.min(1, float32[i]));
-            pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-          }
-          window.flicky.sendAudioChunk(pcm16.buffer);
+        const node = new AudioWorkletNode(ctx, 'capture-processor');
+        node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+          window.flicky.sendAudioChunk(e.data);
         };
-
-        source.connect(processor);
-        processor.connect(ctx.destination);
+        // Pull-graph: source → worklet → destination. The worklet
+        // leaves its outputs zeroed when 'enabled', so connecting to
+        // destination is silent — we only need it so the audio engine
+        // schedules `process()`.
+        source.connect(node);
+        node.connect(ctx.destination);
+        mediaStreamRef.current = stream;
+        audioCtxRef.current = ctx;
+        workletNodeRef.current = node;
+        return node;
       } catch (err) {
-        console.error('[Flicky] Mic capture failed:', err);
+        console.error('[Flicky] Mic capture init failed:', err);
+        return null;
       } finally {
         micStartingRef.current = false;
       }
     };
 
+    const startMic = async () => {
+      const node = await ensureGraph();
+      // If a stop landed between ensureGraph resolving and now, don't
+      // open the gate — the worklet stays muted.
+      if (!node || micStopRequestedRef.current) return;
+      node.port.postMessage('start');
+    };
+
     const stopMic = () => {
-      // Flag for any in-flight startMic to bail before it attaches.
+      // Flag for any in-flight ensureGraph to bail before opening the
+      // gate. If the graph already exists, just mute the worklet —
+      // tearing down would force a fresh getUserMedia next turn.
       micStopRequestedRef.current = true;
-      scriptNodeRef.current?.disconnect();
-      scriptNodeRef.current = null;
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-      audioCtxRef.current?.close();
-      audioCtxRef.current = null;
+      workletNodeRef.current?.port.postMessage('stop');
     };
 
     const unsubStart = window.flicky.onStartCapture(() => startMic());
@@ -147,7 +158,18 @@ export function OverlayApp() {
       unsubStart();
       unsubStop();
       unsubPlayAudio();
-      stopMic();
+      // Real teardown on unmount — stopMic only mutes the worklet so
+      // back-to-back PTT turns stay warm. When the overlay actually
+      // goes away (display unplug, app quit) we release the mic and
+      // close the AudioContext.
+      micStopRequestedRef.current = true;
+      workletNodeRef.current?.port.postMessage('stop');
+      workletNodeRef.current?.disconnect();
+      workletNodeRef.current = null;
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+      void audioCtxRef.current?.close();
+      audioCtxRef.current = null;
     };
   }, []);
 

@@ -5,3 +5,4 @@ declare global {
     flicky: FlickyAPI;
   }
 }
+
