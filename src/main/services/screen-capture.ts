@@ -18,6 +18,20 @@ const JPEG_QUALITY = 82;
 export async function captureDisplays(
   opts: { cursorOnly?: boolean } = {},
 ): Promise<ScreenCapture[]> {
+  const first = await captureOnce(opts);
+  if (first.length > 0) return first;
+  // On macOS, desktopCapturer's source thumbnails can be empty on the
+  // very first call shortly after app launch — the capture pipeline
+  // hasn't warmed up yet. A single short-delayed retry reliably hands
+  // back populated thumbnails without bothering the user.
+  console.warn('[Flicky] capture returned zero on first try; retrying after 300ms');
+  await new Promise((r) => setTimeout(r, 300));
+  return captureOnce(opts);
+}
+
+async function captureOnce(
+  opts: { cursorOnly?: boolean } = {},
+): Promise<ScreenCapture[]> {
   const { cursorOnly = true } = opts;
   const allDisplays = screen.getAllDisplays();
   const cursorPoint = screen.getCursorScreenPoint();
