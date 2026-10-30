@@ -1,20 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { LocalConnection, OllamaModelInfo, OllamaPullProgress } from '../../../shared/types';
-import { VISION_MODEL_CATALOG } from '../../../shared/vision-models';
-
-// Known vision-capable model families (mirrors ollama-api.ts constant).
-const VISION_FAMILIES = [
-  'llava', 'bakllava', 'moondream', 'cogvlm', 'minicpm-v',
-  'llava-llama3', 'llava-phi3', 'granite3.2-vision',
-  'qwen2-vl', 'qwen2.5-vl', 'qwen3-vl',
-  'llava-v1.6', 'llava-v1.5',
-  'gemma3', 'gemma4', 'mistral-small3.1', 'devstral',
-];
-
-function isVision(name: string): boolean {
-  const lower = name.toLowerCase();
-  return VISION_FAMILIES.some((f) => lower.includes(f));
-}
+import { VISION_MODEL_CATALOG, isVisionModel as isVision } from '../../../shared/vision-models';
 
 function fmtSize(bytes?: number): string {
   if (!bytes) return '';

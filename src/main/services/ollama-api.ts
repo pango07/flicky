@@ -6,22 +6,17 @@ import type {
   OllamaPullProgress,
 } from '../../shared/types';
 import { buildSystemPrompt } from './prompts';
+import { isVisionModel } from '../../shared/vision-models';
 
 const CONNECTION_TIMEOUT_MS = 3_000;
 
-// Model families that support vision/multimodal input.
-const VISION_FAMILIES = [
-  'llava', 'bakllava', 'moondream', 'cogvlm', 'minicpm-v',
-  'llava-llama3', 'llava-phi3', 'granite3.2-vision',
-  'qwen2-vl', 'qwen2.5-vl', 'qwen3-vl',
-  'llava-v1.6', 'llava-v1.5',
-  'gemma3', 'gemma4', 'mistral-small3.1', 'devstral',
-];
-
-export function isVisionModel(modelName: string): boolean {
-  const lower = modelName.toLowerCase();
-  return VISION_FAMILIES.some((f) => lower.includes(f));
-}
+// Appended to the prompt when screenshots exist but aren't sent. The system
+// prompt always describes screen0 etc., so without this the model invents
+// a screen ("it looks dark", made-up buttons) instead of saying it can't see.
+const NO_IMAGE_NOTE =
+  '\n\n(Note: no screenshot is attached because the current model does not accept images. ' +
+  "Do not describe or guess at the user's screen and do not emit POINT tags. " +
+  'If the question needs the screen, tell the user to pick a vision-capable model in Mind settings.)';
 
 export interface OllamaStreamCallbacks {
   onChunk: (text: string) => void;
@@ -32,6 +27,13 @@ export interface OllamaStreamCallbacks {
 export interface OllamaChatOptions {
   replyTone: ReplyTone;
   signal?: AbortSignal;
+  /**
+   * 'external' = hosted OpenAI-compatible API (Groq, OpenRouter, xAI…).
+   * Model ids there don't follow Ollama naming, so we can't tell from the
+   * name whether images are supported; we send them and fall back to
+   * text-only if the provider rejects the request.
+   */
+  connectionType?: 'local' | 'external';
 }
 
 export interface OllamaTestResult {
@@ -263,50 +265,67 @@ export class OllamaAPI {
     bearerToken?: string,
   ): Promise<void> {
     const systemPrompt = buildSystemPrompt(options.replyTone, { hasWebSearch: false });
-    const vision = isVisionModel(model);
+    const knownVision = isVisionModel(model);
+    const hasScreens = screenshots.length > 0;
+    const url = `${normalizeBase(baseUrl)}/v1/chat/completions`;
 
-    const messages: Array<{ role: string; content: unknown }> = [
-      { role: 'system', content: systemPrompt },
-    ];
+    const buildBody = (withImages: boolean) => {
+      const messages: Array<{ role: string; content: unknown }> = [
+        { role: 'system', content: systemPrompt },
+      ];
 
-    for (const turn of history) {
-      messages.push({ role: turn.role, content: turn.content });
-    }
-
-    // Only send image content for vision-capable models.
-    if (vision && screenshots.length > 0) {
-      const userContent: Array<Record<string, unknown>> = [];
-      for (let i = 0; i < screenshots.length; i++) {
-        const sc = screenshots[i];
-        userContent.push({
-          type: 'text',
-          text: `[screen${i}] ${sc.imageWidth}x${sc.imageHeight}px.${sc.isCursorScreen ? ' (active screen)' : ''}`,
-        });
-        userContent.push({
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${sc.dataBase64}` },
-        });
+      for (const turn of history) {
+        messages.push({ role: turn.role, content: turn.content });
       }
-      userContent.push({ type: 'text', text: prompt });
-      messages.push({ role: 'user', content: userContent });
-    } else {
-      messages.push({ role: 'user', content: prompt });
-    }
 
-    const body = {
-      model,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
+      if (withImages) {
+        const userContent: Array<Record<string, unknown>> = [];
+        for (let i = 0; i < screenshots.length; i++) {
+          const sc = screenshots[i];
+          userContent.push({
+            type: 'text',
+            text: `[screen${i}] ${sc.imageWidth}x${sc.imageHeight}px.${sc.isCursorScreen ? ' (active screen)' : ''}`,
+          });
+          userContent.push({
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${sc.dataBase64}` },
+          });
+        }
+        userContent.push({ type: 'text', text: prompt });
+        messages.push({ role: 'user', content: userContent });
+      } else {
+        messages.push({ role: 'user', content: hasScreens ? prompt + NO_IMAGE_NOTE : prompt });
+      }
+
+      return JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+      });
     };
 
-    try {
-      const response = await fetch(`${normalizeBase(baseUrl)}/v1/chat/completions`, {
+    const send = (withImages: boolean) =>
+      fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders(bearerToken) },
-        body: JSON.stringify(body),
+        body: buildBody(withImages),
         signal: options.signal,
       });
+
+    // Local Ollama: trust the name list. External: always try images.
+    const tryImages = hasScreens && (knownVision || options.connectionType === 'external');
+
+    try {
+      let response = await send(tryImages);
+
+      // A text-only model behind an OpenAI-compatible API rejects image
+      // parts with a 4xx. Retry once without them rather than failing the turn.
+      if (!response.ok && tryImages && !knownVision && [400, 413, 415, 422].includes(response.status)) {
+        const errText = await response.text();
+        console.warn(`[mind] ${model} rejected image input (${response.status}); retrying text-only: ${errText.slice(0, 200)}`);
+        response = await send(false);
+      }
 
       if (!response.ok) {
         const errText = await response.text();
