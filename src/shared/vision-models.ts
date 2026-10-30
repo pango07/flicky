@@ -86,3 +86,20 @@ export const VISION_MODEL_CATALOG: VisionModelEntry[] = [
     librarySlug: 'gemma4',
   },
 ];
+
+// Name fragments of model families known to accept image input. Matched
+// as substrings of the lowercased model id, so provider prefixes like
+// `meta-llama/` or a connection's prefixId don't get in the way.
+export const VISION_FAMILIES = [
+  'llava', 'bakllava', 'moondream', 'cogvlm', 'minicpm-v',
+  'llava-llama3', 'llava-phi3', 'granite3.2-vision',
+  'qwen2-vl', 'qwen2.5-vl', 'qwen3-vl',
+  'llava-v1.6', 'llava-v1.5',
+  'gemma3', 'gemma4', 'mistral-small3.1', 'devstral',
+  'llama3.2-vision', 'llama-4', 'llama4', 'pixtral',
+];
+
+export function isVisionModel(modelName: string): boolean {
+  const lower = modelName.toLowerCase();
+  return VISION_FAMILIES.some((f) => lower.includes(f));
+}

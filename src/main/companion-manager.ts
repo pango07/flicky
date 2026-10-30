@@ -756,7 +756,7 @@ export class CompanionManager {
         this.lastScreenshots,
         this.context.getMessagesForSend(),
         fullModelId,
-        { replyTone: mindOptions.replyTone, signal: mindOptions.signal },
+        { replyTone: mindOptions.replyTone, signal: mindOptions.signal, connectionType: conn.type },
         mindCallbacks,
         conn.url,
         bearerToken,
